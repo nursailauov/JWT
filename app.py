@@ -29,7 +29,7 @@ PLATFORM_MAP = {
     11: "X (Twitter)",
     13: "AppleId",
 }
-DEFAULT_PLATFORMS = [8, 5, 3, 4, 6, 11, 13]
+DEFAULT_PLATFORMS = [3, 4, 5, 6, 8, 11, 13]
 
 
 def decode_ff_name(b64_str):
@@ -44,8 +44,8 @@ def decode_ff_name(b64_str):
         for i, byte in enumerate(encrypted_bytes):
             decrypted_bytes.append(byte ^ key[i % len(key)])
         return decrypted_bytes.decode("utf-8", errors="ignore")
-    except Exception as exc:
-        return f"Error decoding: {exc}"
+    except Exception:
+        return ""
 
 
 def encrypt_message(plaintext):
@@ -60,24 +60,6 @@ def decode_jwt_payload(token_value):
         payload_b64 = token_value.split(".")[1]
         payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
         return json.loads(base64.urlsafe_b64decode(payload_b64.encode("utf-8")))
-
-
-def parse_platform_type(value):
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def platform_candidates(platform_type=None):
-    preferred = parse_platform_type(platform_type)
-    platforms = []
-    if preferred:
-        platforms.append(preferred)
-    platforms.extend(platform for platform in DEFAULT_PLATFORMS if platform not in platforms)
-    return platforms
 
 
 def extract_eat_token(user_input):
@@ -131,7 +113,7 @@ def fetch_open_id(access_token):
             return None, "Failed to extract open_id"
         return open_id, None
     except Exception as exc:
-        return None, f"Exception occurred: {exc}"
+        return None, str(exc)
 
 
 def build_game_data(access_token, open_id, platform_type):
@@ -162,16 +144,10 @@ def build_game_data(access_token, open_id, platform_type):
     return game_data.SerializeToString()
 
 
-def internal_generate_jwt(access_token, open_id=None, platform_type=None):
-    if not open_id:
-        open_id, error = fetch_open_id(access_token)
-        if error:
-            return {
-                "status": "error",
-                "message": error,
-                "hint": "Pass open_id with /token to avoid external open_id lookup.",
-                "correct_usage": "/token?access_token=YOUR_ACCESS_TOKEN&open_id=YOUR_OPEN_ID&platform_type=5"
-            }, 400
+def internal_generate_jwt(access_token):
+    open_id, error = fetch_open_id(access_token)
+    if error:
+        return {"status": "error", "message": error}, 400
 
     headers = {
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
@@ -184,13 +160,10 @@ def internal_generate_jwt(access_token, open_id=None, platform_type=None):
         "ReleaseVersion": "OB53",
     }
 
-    attempts = []
-    for candidate in platform_candidates(platform_type):
+    for platform_type in DEFAULT_PLATFORMS:
         try:
-            serialized_data = build_game_data(access_token, open_id, candidate)
-            encrypted_data = encrypt_message(serialized_data)
+            encrypted_data = encrypt_message(build_game_data(access_token, open_id, platform_type))
             response = requests.post(MAJOR_LOGIN_URL, data=encrypted_data, headers=headers, verify=False, timeout=8)
-            attempts.append({"platform_type": candidate, "status_code": response.status_code})
             if response.status_code != 200:
                 continue
 
@@ -201,10 +174,10 @@ def internal_generate_jwt(access_token, open_id=None, platform_type=None):
                 continue
 
             decoded_token = decode_jwt_payload(token_value)
-            p_id = decoded_token.get("external_type")
+            external_type = decoded_token.get("external_type")
             raw_nickname = decoded_token.get("nickname", "")
             account_name = decode_ff_name(raw_nickname)
-            if "Error decoding" in account_name or not account_name:
+            if not account_name:
                 import urllib.parse
                 account_name = urllib.parse.unquote(raw_nickname)
 
@@ -213,21 +186,16 @@ def internal_generate_jwt(access_token, open_id=None, platform_type=None):
                 "account_id": decoded_token.get("account_id"),
                 "account_name": account_name,
                 "open_id": open_id,
-                "platform": PLATFORM_MAP.get(p_id, f"Unknown ({p_id})"),
-                "platform_type": p_id,
+                "platform": PLATFORM_MAP.get(external_type, f"Unknown ({external_type})"),
+                "platform_type": external_type,
                 "region": decoded_token.get("lock_region"),
                 "status": "success",
                 "token": token_value,
             }, 200
-        except Exception as exc:
-            attempts.append({"platform_type": candidate, "error": str(exc)})
+        except Exception:
             continue
 
-    return {
-        "status": "error",
-        "message": "No valid platform found or all authentication attempts failed.",
-        "attempts": attempts,
-    }, 400
+    return {"status": "error", "message": "No valid platform found."}, 400
 
 
 def get_request_param(param_name):
@@ -238,88 +206,26 @@ def get_request_param(param_name):
     return request.args.get(param_name)
 
 
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({
-        "status": "error",
-        "message": "Endpoint not found.",
-        "hint": "Make sure you are calling /guest, /token, or /eat.",
-        "api_docs": "Send a GET request to / for documentation."
-    }), 404
-
-
-@app.errorhandler(405)
-def method_not_allowed(error):
-    return jsonify({
-        "status": "error",
-        "message": "Method not allowed for this endpoint.",
-        "hint": "This API supports GET and POST.",
-        "api_docs": "Send a GET request to / for documentation."
-    }), 405
-
-
 @app.route("/", methods=["GET"])
 @app.route("/api", methods=["GET"])
 def api_docs():
     return jsonify({
         "status": "success",
-        "message": "Welcome to the FF JWT Generator API.",
         "endpoints": {
-            "/guest": {
-                "methods": ["GET", "POST"],
-                "description": "Generate JWT using Free Fire Guest Login credentials.",
-                "parameters": {
-                    "uid": "String required",
-                    "password": "String required",
-                },
-                "examples": {
-                    "GET": "/guest?uid=12345678&password=your_password_here",
-                    "POST_JSON": {"uid": "12345678", "password": "your_password_here"},
-                },
-            },
-            "/token": {
-                "methods": ["GET", "POST"],
-                "description": "Generate JWT using a valid Garena access token.",
-                "parameters": {
-                    "access_token": "String required",
-                    "open_id": "String optional but recommended",
-                    "platform_type": "Integer optional: 8 Google, 5 VK, 3 Facebook, 4 Guest, 6 Huawei, 11 X, 13 Apple",
-                },
-                "examples": {
-                    "GET": "/token?access_token=YOUR_ACCESS_TOKEN&open_id=YOUR_OPEN_ID&platform_type=5",
-                    "POST_JSON": {"access_token": "YOUR_ACCESS_TOKEN", "open_id": "YOUR_OPEN_ID", "platform_type": 5},
-                },
-            },
-            "/eat": {
-                "methods": ["GET", "POST"],
-                "description": "Resolve an EAT token or callback URL into a JWT token.",
-                "parameters": {"eat_token": "String required"},
-                "examples": {
-                    "GET": "/eat?eat_token=YOUR_EAT_TOKEN_OR_URL",
-                    "POST_JSON": {"eat_token": "YOUR_EAT_TOKEN_OR_URL"},
-                },
-            },
+            "/token": "/token?access_token=YOUR_ACCESS_TOKEN",
+            "/guest": "/guest?uid=UID&password=PASSWORD",
+            "/eat": "/eat?eat_token=EAT_TOKEN_OR_URL",
         },
+        "platforms": PLATFORM_MAP,
     }), 200
 
 
 @app.route("/token", methods=["GET", "POST"])
 def token_endpoint():
     access_token = get_request_param("access_token")
-    open_id = get_request_param("open_id")
-    platform_type = get_request_param("platform_type")
-
     if not access_token or access_token.strip() == "":
-        return jsonify({
-            "status": "error",
-            "message": "The 'access_token' parameter is missing or empty!",
-            "correct_usage": {
-                "GET": "/token?access_token=YOUR_ACCESS_TOKEN&open_id=YOUR_OPEN_ID&platform_type=5",
-                "POST": {"access_token": "YOUR_ACCESS_TOKEN", "open_id": "YOUR_OPEN_ID", "platform_type": 5},
-            },
-        }), 400
-
-    result, status_code = internal_generate_jwt(access_token.strip(), open_id, platform_type)
+        return jsonify({"status": "error", "message": "access_token required"}), 400
+    result, status_code = internal_generate_jwt(access_token.strip())
     return jsonify(result), status_code
 
 
@@ -327,16 +233,8 @@ def token_endpoint():
 def guest_endpoint():
     uid = get_request_param("uid")
     password = get_request_param("password")
-
     if not uid or not password:
-        return jsonify({
-            "status": "error",
-            "message": "Both 'uid' and 'password' parameters are required!",
-            "correct_usage": {
-                "GET": "/guest?uid=YOUR_UID&password=YOUR_PASSWORD",
-                "POST": {"uid": "YOUR_UID", "password": "YOUR_PASSWORD"},
-            },
-        }), 400
+        return jsonify({"status": "error", "message": "uid and password required"}), 400
 
     oauth_url = "https://100067.connect.garena.com/oauth/guest/token/grant"
     payload = {
@@ -356,53 +254,70 @@ def guest_endpoint():
     try:
         oauth_response = requests.post(oauth_url, data=payload, headers=headers, timeout=10)
     except requests.RequestException as exc:
-        return jsonify({"status": "error", "message": f"Connection failed: {exc}"}), 500
+        return jsonify({"status": "error", "message": str(exc)}), 500
 
     if oauth_response.status_code != 200:
         try:
-            err_data = oauth_response.json()
-            err_data["status"] = "error"
-            return jsonify(err_data), oauth_response.status_code
+            data = oauth_response.json()
         except ValueError:
-            return jsonify({"status": "error", "message": oauth_response.text}), oauth_response.status_code
+            data = {"message": oauth_response.text}
+        data["status"] = "error"
+        return jsonify(data), oauth_response.status_code
 
     try:
         oauth_data = oauth_response.json()
     except ValueError:
-        return jsonify({"status": "error", "message": "Invalid JSON response from OAuth service"}), 500
+        return jsonify({"status": "error", "message": "Invalid JSON response"}), 500
 
     if "access_token" not in oauth_data or "open_id" not in oauth_data:
-        return jsonify({
-            "status": "error",
-            "message": "OAuth response missing access_token or open_id",
-            "details": oauth_data,
-        }), 500
+        return jsonify({"status": "error", "message": "OAuth response missing access_token or open_id"}), 500
 
-    result, status_code = internal_generate_jwt(oauth_data["access_token"], oauth_data["open_id"], 4)
-    return jsonify(result), status_code
+    access_token = oauth_data["access_token"]
+    open_id = oauth_data["open_id"]
+    headers_major = {
+        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+        "Connection": "Keep-Alive",
+        "Accept-Encoding": "gzip",
+        "Content-Type": "application/octet-stream",
+        "Expect": "100-continue",
+        "X-Unity-Version": "2018.4.11f1",
+        "X-GA": "v1 1",
+        "ReleaseVersion": "OB53",
+    }
+    try:
+        encrypted_data = encrypt_message(build_game_data(access_token, open_id, 4))
+        response = requests.post(MAJOR_LOGIN_URL, data=encrypted_data, headers=headers_major, verify=False, timeout=8)
+        example_msg = output_pb2.Garena_420()
+        example_msg.ParseFromString(response.content)
+        token_value = getattr(example_msg, "token", None)
+        if not token_value:
+            return jsonify({"status": "error", "message": "No token returned"}), 400
+        decoded_token = decode_jwt_payload(token_value)
+        return jsonify({
+            "access_token": access_token,
+            "account_id": decoded_token.get("account_id"),
+            "open_id": open_id,
+            "platform": PLATFORM_MAP.get(decoded_token.get("external_type")),
+            "platform_type": decoded_token.get("external_type"),
+            "region": decoded_token.get("lock_region"),
+            "status": "success",
+            "token": token_value,
+        }), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
 
 
 @app.route("/eat", methods=["GET", "POST"])
 def eat_endpoint():
     eat_input = get_request_param("eat_token")
     if not eat_input or eat_input.strip() == "":
-        return jsonify({
-            "status": "error",
-            "message": "The 'eat_token' parameter is missing or empty!",
-            "correct_usage": {
-                "GET": "/eat?eat_token=YOUR_EAT_TOKEN_OR_URL",
-                "POST": {"eat_token": "YOUR_EAT_TOKEN_OR_URL"},
-            },
-        }), 400
-
+        return jsonify({"status": "error", "message": "eat_token required"}), 400
     eat_token = extract_eat_token(eat_input)
     if not eat_token:
-        return jsonify({"status": "error", "message": "Invalid EAT format or could not extract 'eat' parameter."}), 400
-
+        return jsonify({"status": "error", "message": "invalid eat_token"}), 400
     access_token = get_access_token_from_eat(eat_token)
     if not access_token:
-        return jsonify({"status": "error", "message": "Failed to resolve EAT to an access token."}), 400
-
+        return jsonify({"status": "error", "message": "failed to resolve access_token"}), 400
     result, status_code = internal_generate_jwt(access_token)
     return jsonify(result), status_code
 
