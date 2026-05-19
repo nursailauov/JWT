@@ -182,13 +182,20 @@ def get_request_param(param_name):
     return request.args.get(param_name)
 
 
+def docs_response():
+    return jsonify({"status":"success","web":"/web","endpoints":{"/token":"GET or POST /token?access_token=YOUR_ACCESS_TOKEN","/guest":"GET or POST /guest?uid=UID&password=PASSWORD","/bulk_guest":"POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}","/eat":"GET or POST /eat?eat_token=EAT_TOKEN_OR_URL"},"platforms":PLATFORM_MAP})
+
+
 @app.route("/", methods=["GET"])
-def index(): return render_template_string(INDEX_HTML)
+def index(): return docs_response()
 
 
 @app.route("/api", methods=["GET"])
-def api_docs():
-    return jsonify({"status":"success","endpoints":{"/token":"/token?access_token=YOUR_ACCESS_TOKEN","/guest":"/guest?uid=UID&password=PASSWORD","/bulk_guest":"POST accounts=uid:password lines","/eat":"/eat?eat_token=EAT_TOKEN_OR_URL"},"platforms":PLATFORM_MAP}), 200
+def api_docs(): return docs_response()
+
+
+@app.route("/web", methods=["GET"])
+def web(): return render_template_string(INDEX_HTML)
 
 
 @app.route("/bulk_guest", methods=["POST"])
