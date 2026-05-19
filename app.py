@@ -351,9 +351,8 @@ def docs_response():
         "status": "success",
         "web": "/web",
         "endpoints": {
-            "/access-jwt": "GET or POST /access-jwt?access_token=ACCESS_TOKEN[&open_id=OPEN_ID]",
+            "/token": "GET or POST /token?access_token=ACCESS_TOKEN[&open_id=OPEN_ID]",
             "/eat": "GET or POST /eat?eat_token=EAT_TOKEN_OR_URL",
-            "/token": "GET or POST /token?uid=UID&password=PASSWORD",
             "/guest": "GET or POST /guest?uid=UID&password=PASSWORD",
             "/bulk_guest": "POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}",
         },
@@ -376,8 +375,8 @@ def web():
     return render_template_string(WEB_HTML)
 
 
-@app.route("/access-jwt", methods=["GET", "POST"])
-def access_jwt_endpoint():
+@app.route("/token", methods=["GET", "POST"])
+def token_endpoint():
     access_token = get_request_param("access_token")
     open_id = get_request_param("open_id")
     if not access_token or not str(access_token).strip():
@@ -401,16 +400,6 @@ def eat_endpoint():
     if isinstance(result, dict):
         result["eat_token"] = eat_token
     return jsonify(result), status_code
-
-
-@app.route("/token", methods=["GET", "POST"])
-def token_endpoint():
-    uid = get_request_param("uid")
-    password = get_request_param("password")
-    if not uid or not password:
-        return jsonify({"status": "error", "message": "uid and password required"}), 400
-    result = generate_guest_account(uid, password)
-    return jsonify(result), 200 if result.get("status") == "success" else 400
 
 
 @app.route("/guest", methods=["GET", "POST"])
