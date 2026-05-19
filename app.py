@@ -41,11 +41,11 @@ WEBS_HTML = r'''
 <div class="form" id="form-eat"><div class="field"><label>EAT token or URL</label><textarea id="eatInput" spellcheck="false"></textarea></div><label class="checks"><input id="eatDebug" type="checkbox"> debug</label><div class="actions"><button class="btn primary" id="runEat">Run EAT</button><button class="btn" data-clear="eat">Clear</button></div></div>
 <div class="form" id="form-guest"><div class="row"><div class="field"><label>UID</label><input id="guestUid" spellcheck="false"></div><div class="field"><label>Password</label><input id="guestPassword" spellcheck="false"></div></div><div class="actions"><button class="btn primary" id="runGuest">Run guest</button><button class="btn" data-clear="guest">Clear</button></div></div>
 <div class="form" id="form-bulk"><div class="field"><label>Accounts uid:password</label><textarea id="bulkAccounts" spellcheck="false" placeholder="4305390755:password&#10;4442030961:password"></textarea></div><div class="actions"><button class="btn primary" id="runBulk">Run bulk</button><button class="btn" data-clear="bulk">Clear</button></div></div>
-<div class="status" id="status">Ready.</div></section><main><div class="grid"><div class="metric"><b id="mStatus">-</b><span>Status</span></div><div class="metric"><b id="mRegion">-</b><span>Region</span></div><div class="metric"><b id="mLevel">-</b><span>Level</span></div><div class="metric"><b id="mLatency">-</b><span>Latency</span></div></div><section class="panel result"><div class="head"><b>Response</b><div class="actions"><button class="btn" id="copyJson">Copy</button><button class="btn" id="downloadJson">Download</button></div></div><pre class="json" id="jsonOut">{}</pre></section></main></div></div>
+<div class="status" id="status">Ready.</div></section><main><div class="grid"><div class="metric"><b id="mStatus">-</b><span>Status</span></div><div class="metric"><b id="mRegion">-</b><span>Region</span></div><div class="metric"><b id="mLevel">-</b><span>Level</span></div><div class="metric"><b id="mLatency">-</b><span>Latency</span></div></div><section class="panel" style="margin-bottom:14px"><div class="head"><b>Account</b><span class="pill" id="profileState">No data</span></div><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:13px"><div class="metric"><b id="pName">-</b><span>Name</span></div><div class="metric"><b id="pAccount">-</b><span>Account ID</span></div><div class="metric"><b id="pPlatform">-</b><span>Platform</span></div><div class="metric"><b id="pLikes">-</b><span>Likes</span></div><div class="metric" style="grid-column:1/-1"><b id="pOpen" style="font-size:14px;word-break:break-all">-</b><span>Open ID</span><div class="actions" style="margin-top:8px"><button class="btn" data-copy-field="open_id">Copy Open ID</button></div></div><div class="metric" style="grid-column:1/-1"><b id="pAccess" style="font-size:12px;word-break:break-all">-</b><span>Access Token</span><div class="actions" style="margin-top:8px"><button class="btn" data-copy-field="access_token">Copy Access</button></div></div><div class="metric" style="grid-column:1/-1"><b id="pToken" style="font-size:12px;word-break:break-all">-</b><span>JWT Token</span><div class="actions" style="margin-top:8px"><button class="btn" data-copy-field="token">Copy JWT</button></div></div></div></section><section class="panel result"><div class="head"><b>Response</b><div class="actions"><button class="btn" id="copyJson">Copy</button><button class="btn" id="downloadJson">Download</button></div></div><pre class="json" id="jsonOut">{}</pre></section></main></div></div>
 <script>
 const $=id=>document.getElementById(id);let last={};let active='token';
 function setStatus(t,cls=''){const el=$('status');el.className='status '+cls;el.textContent=t}
-function showJson(data,ms){last=data||{};$('jsonOut').textContent=JSON.stringify(last,null,2);$('mStatus').textContent=last.status||String(last.success??'-');$('mStatus').className=last.status==='success'||last.success?'ok':(last.status==='error'||last.error?'bad':'');$('mRegion').textContent=last.region||'-';$('mLevel').textContent=last.level??'-';$('mLatency').textContent=ms?`${ms} ms`:'-'}
+function showJson(data,ms){last=data||{};$('jsonOut').textContent=JSON.stringify(last,null,2);$('mStatus').textContent=last.status||String(last.success??'-');$('mStatus').className=last.status==='success'||last.success?'ok':(last.status==='error'||last.error?'bad':'');$('mRegion').textContent=last.region||'-';$('mLevel').textContent=last.level??'-';$('mLatency').textContent=ms?`${ms} ms`:'-';$('profileState').textContent=last.status==='success'||last.token?'Loaded':'No data';$('pName').textContent=last.account_name||'-';$('pAccount').textContent=last.account_id??last.uid??'-';$('pPlatform').textContent=last.platform||last.platform_type||'-';$('pLikes').textContent=last.likes??'-';$('pOpen').textContent=last.open_id||'-';$('pAccess').textContent=last.access_token||'-';$('pToken').textContent=last.token||last.jwt||'-'}
 async function call(path,opts={}){const t=performance.now();setBusy(true);setStatus('Running.');try{const res=await fetch(path,opts);let data;try{data=await res.json()}catch{data={status:'error',message:await res.text()}}const ms=Math.round(performance.now()-t);showJson(data,ms);setStatus(res.ok?'Done.':`HTTP ${res.status}.`,res.ok?'ok':'bad')}catch(e){showJson({status:'error',message:e.message});setStatus(e.message,'bad')}finally{setBusy(false)}}
 function setBusy(v){document.querySelectorAll('button').forEach(b=>{if(!b.classList.contains('tab'))b.disabled=v})}
 function q(v){return encodeURIComponent(v.trim())}
@@ -57,6 +57,7 @@ $('runToken').onclick=()=>call(tokenUrl());$('runEat').onclick=()=>call(eatUrl()
 document.querySelectorAll('[data-clear]').forEach(b=>b.onclick=()=>{document.querySelectorAll('#form-'+b.dataset.clear+' input,#form-'+b.dataset.clear+' textarea').forEach(x=>{if(x.type==='checkbox')x.checked=false;else x.value=''});showJson({});setStatus('Cleared.')});
 $('copyJson').onclick=async()=>{await navigator.clipboard.writeText(JSON.stringify(last,null,2));setStatus('Copied.')};
 $('downloadJson').onclick=()=>{const blob=new Blob([JSON.stringify(last,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='jwt-result.json';a.click();URL.revokeObjectURL(a.href)};
+document.querySelectorAll('[data-copy-field]').forEach(b=>b.onclick=async()=>{const key=b.dataset.copyField;await navigator.clipboard.writeText(String(last[key]||''));setStatus('Copied '+key+'.')});
 </script></body></html>
 '''
 
@@ -175,20 +176,11 @@ def get_access_token_from_eat(eat_token):
 def response_debug(response, body_limit=300):
     text = response.text or ""
     preview = text[:body_limit]
-    return {
-        "status_code": response.status_code,
-        "url": response.url,
-        "content_type": response.headers.get("content-type"),
-        "server": response.headers.get("server"),
-        "captcha_detected": "captcha" in preview.lower() or "captcha-delivery" in preview.lower(),
-        "body_preview": preview,
-    }
+    return {"status_code": response.status_code, "url": response.url, "content_type": response.headers.get("content-type"), "server": response.headers.get("server"), "captcha_detected": "captcha" in preview.lower() or "captcha-delivery" in preview.lower(), "body_preview": preview}
 
 
 def fetch_open_id_from_oauth_inspect(access_token, diagnostics):
-    inspect_url = "https://100067.connect.garena.com/oauth/token/inspect"
-    headers = {"User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)"}
-    response = http().get(inspect_url, params={"token": access_token}, headers=headers, verify=False, timeout=HTTP_TIMEOUT)
+    response = http().get("https://100067.connect.garena.com/oauth/token/inspect", params={"token": access_token}, headers={"User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)"}, verify=False, timeout=HTTP_TIMEOUT)
     step = {"step": "oauth_token_inspect", "response": response_debug(response)}
     try:
         data = response.json()
@@ -205,21 +197,7 @@ def fetch_open_id(access_token, debug=False):
         open_id = fetch_open_id_from_oauth_inspect(access_token, diagnostics)
         if open_id:
             return open_id, None, diagnostics
-        uid_headers = {
-            "authority": "prod-api.reward.ff.garena.com",
-            "accept": "application/json, text/plain, */*",
-            "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "access-token": access_token,
-            "origin": "https://reward.ff.garena.com",
-            "referer": "https://reward.ff.garena.com/",
-            "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124"',
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-site",
-            "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        }
+        uid_headers = {"authority": "prod-api.reward.ff.garena.com", "accept": "application/json, text/plain, */*", "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7", "access-token": access_token, "origin": "https://reward.ff.garena.com", "referer": "https://reward.ff.garena.com/", "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124"', "sec-ch-ua-mobile": "?1", "sec-ch-ua-platform": '"Android"', "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-site", "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
         uid_res = http().get("https://prod-api.reward.ff.garena.com/redemption/api/auth/inspect_token/", headers=uid_headers, verify=False, timeout=HTTP_TIMEOUT)
         uid_step = {"step": "reward_inspect_token", "response": response_debug(uid_res)}
         try:
@@ -234,9 +212,8 @@ def fetch_open_id(access_token, debug=False):
         payload = {"app_id": 100067, "login_id": str(uid)}
         shop_headers = {"Accept": "application/json, text/plain, */*", "Content-Type": "application/json", "Cookie": "source=mb; region=MA; language=ar", "Origin": "https://shop2game.com", "Referer": "https://shop2game.com/", "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36"}
         topup_headers = {"Accept": "application/json, text/plain, */*", "Content-Type": "application/json", "Origin": "https://topup.pk", "Referer": "https://topup.pk/", "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"}
-        attempts = [("shop2game", "https://shop2game.com/api/auth/player_id_login", shop_headers), ("topup", "https://topup.pk/api/auth/player_id_login", topup_headers)]
         errors = []
-        for label, url, headers in attempts:
+        for label, url, headers in [("shop2game", "https://shop2game.com/api/auth/player_id_login", shop_headers), ("topup", "https://topup.pk/api/auth/player_id_login", topup_headers)]:
             openid_res = http().post(url, headers=headers, json=payload, verify=False, timeout=HTTP_TIMEOUT)
             step = {"step": f"{label}_player_id_login", "response": response_debug(openid_res)}
             try:
