@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, redirect
 from flask_cors import CORS
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
 import json
+import threading
 import requests
 import jwt
 import urllib3
@@ -22,21 +23,40 @@ AES_IV = b'6oyZDr22E3ychjM%'
 MAJOR_LOGIN_URL = "https://loginbp.ggpolarbear.com/MajorLogin"
 PLATFORM_MAP = {3: "Facebook", 4: "Guest", 5: "VK", 6: "Huawei", 8: "Google", 11: "X (Twitter)", 13: "AppleId"}
 DEFAULT_PLATFORMS = [8, 3, 4, 6, 5, 11, 13]
+HTTP_LOCAL = threading.local()
+HTTP_TIMEOUT = 8
 
-WEB_HTML = r'''
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JWT Account Checker</title>
-<style>:root{color-scheme:dark;--bg:#0b0f17;--panel:#121925;--line:#253247;--text:#e8eef8;--muted:#8fa0b8;--ok:#43d17a;--bad:#ff6473;--warn:#f5c15b;--accent:#4ea1ff}*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}.wrap{max-width:1180px;margin:0 auto;padding:28px 16px 40px}h1{margin:0 0 6px;font-size:34px}.sub{color:var(--muted);margin-bottom:18px}.grid{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.head{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border-bottom:1px solid var(--line)}textarea{width:100%;min-height:430px;resize:vertical;border:0;outline:0;padding:14px;background:#0a0f18;color:var(--text);font:13px/1.45 Consolas,monospace}.actions{display:flex;gap:10px;padding:12px;border-top:1px solid var(--line)}button{border:1px solid var(--line);background:#172235;color:var(--text);border-radius:7px;padding:10px 13px;cursor:pointer;font-weight:700}.primary{background:var(--accent);border-color:var(--accent);color:#06111f}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px}.stat b{display:block;font-size:22px}.stat span,.small,.status{color:var(--muted);font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 11px;border-bottom:1px solid var(--line)}th{color:var(--muted);position:sticky;top:0;background:#0f1520}.table-wrap{max-height:560px;overflow:auto}.badge{display:inline-flex;min-width:58px;justify-content:center;padding:4px 7px;border-radius:999px;background:#1b2840;color:var(--muted);font-weight:700}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.status{padding:10px 12px;border-top:1px solid var(--line);min-height:39px}@media(max-width:860px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}</style></head>
-<body><div class="wrap"><h1>JWT Account Checker</h1><div class="sub">Bulk guest check. Paste uid:password lines.</div><div class="grid"><section class="panel"><div class="head"><b>Accounts</b><span class="small" id="lineCount">0 lines</span></div><textarea id="accounts" spellcheck="false" placeholder="4305390755:password&#10;4442030961:password"></textarea><div class="actions"><button class="primary" id="checkBtn">Check</button><button id="clearBtn">Clear</button></div><div class="status" id="status">Waiting.</div></section><main><div class="stats"><div class="stat"><b id="total">0</b><span>Total</span></div><div class="stat"><b id="ok">0</b><span>Working</span></div><div class="stat"><b id="lvl22">0</b><span>Level 22+</span></div><div class="stat"><b id="bad">0</b><span>Errors</span></div></div><section class="panel"><div class="head"><b>Results</b><button id="copyBtn">Copy JSON</button></div><div class="table-wrap"><table><thead><tr><th>#</th><th>UID</th><th>Level</th><th>Likes</th><th>Region</th><th>Name</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="small">No results.</td></tr></tbody></table></div></section></main></div></div>
+
+def http():
+    if not hasattr(HTTP_LOCAL, "session"):
+        HTTP_LOCAL.session = requests.Session()
+    return HTTP_LOCAL.session
+
+
+WEBS_HTML = r'''
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JWT Toolkit</title>
+<style>:root{color-scheme:dark;--bg:#080b10;--panel:#111821;--panel2:#0d131b;--line:#263340;--text:#edf3fa;--muted:#94a3b4;--accent:#38bdf8;--ok:#34d399;--bad:#fb7185}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}.wrap{max-width:1240px;margin:0 auto;padding:24px 14px 32px}.top{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:16px}.brand h1{margin:0;font-size:30px;line-height:1.05}.brand span,.dev,.status{color:var(--muted);font-size:13px}.dev{white-space:nowrap}.layout{display:grid;grid-template-columns:360px 1fr;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.head{display:flex;align-items:center;justify-content:space-between;padding:12px 13px;border-bottom:1px solid var(--line)}.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px}.tab{height:38px;border:1px solid var(--line);background:#141d28;color:var(--text);border-radius:7px;font-weight:700;cursor:pointer}.tab.active{background:var(--accent);border-color:var(--accent);color:#041018}.form{padding:13px;display:none}.form.active{display:block}.field{margin-bottom:12px}label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}input,textarea{width:100%;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:7px;outline:0;padding:10px 11px;font:13px/1.45 Consolas,monospace}textarea{min-height:154px;resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.checks{display:flex;align-items:center;gap:8px;margin:4px 0 12px;color:var(--muted);font-size:13px}.checks input{width:16px;height:16px}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line);background:#172231;color:var(--text);border-radius:7px;padding:10px 12px;font-weight:700;cursor:pointer}.btn.primary{background:var(--accent);border-color:var(--accent);color:#06111f}.btn:disabled{opacity:.55;cursor:not-allowed}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:22px}.metric span{color:var(--muted);font-size:12px}.result{min-height:560px}.json{margin:0;white-space:pre-wrap;word-break:break-word;padding:13px;font:12px/1.45 Consolas,monospace;color:#dbeafe}.status{padding:10px 13px;border-top:1px solid var(--line);min-height:38px}.pill{display:inline-flex;align-items:center;min-height:26px;padding:4px 8px;border-radius:999px;background:#162334;border:1px solid var(--line);font-size:12px}.ok{color:var(--ok)}.bad{color:var(--bad)}@media(max-width:900px){.layout{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.top{align-items:start;flex-direction:column}.dev{white-space:normal}}@media(max-width:520px){.tabs{grid-template-columns:repeat(2,1fr)}.row{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.brand h1{font-size:25px}}</style></head>
+<body><div class="wrap"><div class="top"><div class="brand"><h1>JWT Toolkit</h1><span>Token, EAT, guest and bulk tools</span></div><div class="dev">dev nur sailauov</div></div><div class="layout"><section class="panel"><div class="head"><b>Tools</b><span class="pill" id="modeName">Token</span></div><div class="tabs"><button class="tab active" data-tab="token">Token</button><button class="tab" data-tab="eat">EAT</button><button class="tab" data-tab="guest">Guest</button><button class="tab" data-tab="bulk">Bulk</button></div>
+<div class="form active" id="form-token"><div class="field"><label>Access token</label><textarea id="tokenAccess" spellcheck="false"></textarea></div><div class="field"><label>Open ID optional</label><input id="tokenOpen" spellcheck="false"></div><label class="checks"><input id="tokenDebug" type="checkbox"> debug</label><div class="actions"><button class="btn primary" id="runToken">Run token</button><button class="btn" data-clear="token">Clear</button></div></div>
+<div class="form" id="form-eat"><div class="field"><label>EAT token or URL</label><textarea id="eatInput" spellcheck="false"></textarea></div><label class="checks"><input id="eatDebug" type="checkbox"> debug</label><div class="actions"><button class="btn primary" id="runEat">Run EAT</button><button class="btn" data-clear="eat">Clear</button></div></div>
+<div class="form" id="form-guest"><div class="row"><div class="field"><label>UID</label><input id="guestUid" spellcheck="false"></div><div class="field"><label>Password</label><input id="guestPassword" spellcheck="false"></div></div><div class="actions"><button class="btn primary" id="runGuest">Run guest</button><button class="btn" data-clear="guest">Clear</button></div></div>
+<div class="form" id="form-bulk"><div class="field"><label>Accounts uid:password</label><textarea id="bulkAccounts" spellcheck="false" placeholder="4305390755:password&#10;4442030961:password"></textarea></div><div class="actions"><button class="btn primary" id="runBulk">Run bulk</button><button class="btn" data-clear="bulk">Clear</button></div></div>
+<div class="status" id="status">Ready.</div></section><main><div class="grid"><div class="metric"><b id="mStatus">-</b><span>Status</span></div><div class="metric"><b id="mRegion">-</b><span>Region</span></div><div class="metric"><b id="mLevel">-</b><span>Level</span></div><div class="metric"><b id="mLatency">-</b><span>Latency</span></div></div><section class="panel result"><div class="head"><b>Response</b><div class="actions"><button class="btn" id="copyJson">Copy</button><button class="btn" id="downloadJson">Download</button></div></div><pre class="json" id="jsonOut">{}</pre></section></main></div></div>
 <script>
-const $=id=>document.getElementById(id);let results=[];let running=false;
-function parseLines(){return $('accounts').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).map(line=>{const p=line.indexOf(':');return p<0?{raw:line,status:'error',message:'invalid_format'}:{uid:line.slice(0,p).trim(),password:line.slice(p+1).trim(),status:'pending'}})}
-function updateCount(){$('lineCount').textContent=`${parseLines().length} lines`}
-function setStatus(t){$('status').textContent=t}
-function esc(v){return String(v??'-').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function draw(){const ok=results.filter(r=>r.status==='success');$('total').textContent=results.length;$('ok').textContent=ok.length;$('lvl22').textContent=ok.filter(r=>Number(r.level||0)>=22).length;$('bad').textContent=results.filter(r=>r.status==='error').length;if(!results.length){$('rows').innerHTML='<tr><td colspan="7" class="small">No results.</td></tr>';return}$('rows').innerHTML=results.map((r,i)=>{const level=r.level==null?'-':r.level;const cls=Number(level)>=22?'ok':(level==='-'?'':'warn');const st=r.status==='success'?'<span class="ok">success</span>':(r.status==='pending'?'<span class="warn">pending</span>':`<span class="bad">${esc(r.message||'error')}</span>`);return `<tr><td>${i+1}</td><td>${esc(r.uid||r.raw)}</td><td><span class="badge ${cls}">${esc(level)}</span></td><td>${esc(r.likes)}</td><td>${esc(r.region)}</td><td>${esc(r.account_name)}</td><td>${st}</td></tr>`}).join('')}
-async function checkOne(item,index){if(!item.uid||!item.password){results[index]={...item,status:'error',message:'invalid_format'};draw();return}try{const res=await fetch('/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:item.uid,password:item.password})});const data=await res.json();results[index]={...data,uid:item.uid,status:data.status||'error'};}catch(e){results[index]={uid:item.uid,status:'error',message:e.message}}draw();}
-async function check(){if(running)return;const items=parseLines();if(!items.length){setStatus('Paste uid:password lines.');return}running=true;$('checkBtn').disabled=true;results=items.map(x=>({...x,status:x.status==='error'?'error':'pending'}));draw();let done=0;setStatus(`Checking: 0/${items.length}`);let next=0;async function worker(){while(next<items.length){const i=next++;await checkOne(items[i],i);done++;setStatus(`Checking: ${done}/${items.length}`)}}await Promise.all(Array.from({length:Math.min(4,items.length)},worker));setStatus(`Done: ${results.filter(r=>r.status==='success').length}/${items.length} working.`);running=false;$('checkBtn').disabled=false;}
-$('accounts').addEventListener('input',updateCount);$('checkBtn').addEventListener('click',check);$('clearBtn').addEventListener('click',()=>{if(running)return;$('accounts').value='';results=[];updateCount();draw();setStatus('Waiting.')});$('copyBtn').addEventListener('click',async()=>{await navigator.clipboard.writeText(JSON.stringify(results,null,2));setStatus('JSON copied.')});updateCount();
+const $=id=>document.getElementById(id);let last={};let active='token';
+function setStatus(t,cls=''){const el=$('status');el.className='status '+cls;el.textContent=t}
+function showJson(data,ms){last=data||{};$('jsonOut').textContent=JSON.stringify(last,null,2);$('mStatus').textContent=last.status||String(last.success??'-');$('mStatus').className=last.status==='success'||last.success?'ok':(last.status==='error'||last.error?'bad':'');$('mRegion').textContent=last.region||'-';$('mLevel').textContent=last.level??'-';$('mLatency').textContent=ms?`${ms} ms`:'-'}
+async function call(path,opts={}){const t=performance.now();setBusy(true);setStatus('Running.');try{const res=await fetch(path,opts);let data;try{data=await res.json()}catch{data={status:'error',message:await res.text()}}const ms=Math.round(performance.now()-t);showJson(data,ms);setStatus(res.ok?'Done.':`HTTP ${res.status}.`,res.ok?'ok':'bad')}catch(e){showJson({status:'error',message:e.message});setStatus(e.message,'bad')}finally{setBusy(false)}}
+function setBusy(v){document.querySelectorAll('button').forEach(b=>{if(!b.classList.contains('tab'))b.disabled=v})}
+function q(v){return encodeURIComponent(v.trim())}
+function tokenUrl(){let u='/token?access_token='+q($('tokenAccess').value);if($('tokenOpen').value.trim())u+='&open_id='+q($('tokenOpen').value);if($('tokenDebug').checked)u+='&debug=1';return u}
+function eatUrl(){let u='/eat?eat_token='+q($('eatInput').value);if($('eatDebug').checked)u+='&debug=1';return u}
+function guestUrl(){return '/guest?uid='+q($('guestUid').value)+'&password='+q($('guestPassword').value)}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{active=b.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.form').forEach(x=>x.classList.remove('active'));$('form-'+active).classList.add('active');$('modeName').textContent=b.textContent;setStatus('Ready.')});
+$('runToken').onclick=()=>call(tokenUrl());$('runEat').onclick=()=>call(eatUrl());$('runGuest').onclick=()=>call(guestUrl());$('runBulk').onclick=()=>call('/bulk_guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:$('bulkAccounts').value})});
+document.querySelectorAll('[data-clear]').forEach(b=>b.onclick=()=>{document.querySelectorAll('#form-'+b.dataset.clear+' input,#form-'+b.dataset.clear+' textarea').forEach(x=>{if(x.type==='checkbox')x.checked=false;else x.value=''});showJson({});setStatus('Cleared.')});
+$('copyJson').onclick=async()=>{await navigator.clipboard.writeText(JSON.stringify(last,null,2));setStatus('Copied.')};
+$('downloadJson').onclick=()=>{const blob=new Blob([JSON.stringify(last,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='jwt-result.json';a.click();URL.revokeObjectURL(a.href)};
 </script></body></html>
 '''
 
@@ -145,7 +165,7 @@ def get_access_token_from_eat(eat_token):
     api_url = f"https://api-otrss.garena.com/support/callback/?access_token={eat_token}"
     headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/114.0.0.0 Mobile"}
     try:
-        response = requests.get(api_url, headers=headers, allow_redirects=True, timeout=10)
+        response = http().get(api_url, headers=headers, allow_redirects=True, timeout=HTTP_TIMEOUT)
         final_params = parse_qs(urlparse(response.url).query)
         return final_params.get("access_token", [None])[0]
     except Exception:
@@ -168,11 +188,8 @@ def response_debug(response, body_limit=300):
 def fetch_open_id_from_oauth_inspect(access_token, diagnostics):
     inspect_url = "https://100067.connect.garena.com/oauth/token/inspect"
     headers = {"User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)"}
-    response = requests.get(inspect_url, params={"token": access_token}, headers=headers, verify=False, timeout=10)
-    step = {
-        "step": "oauth_token_inspect",
-        "response": response_debug(response),
-    }
+    response = http().get(inspect_url, params={"token": access_token}, headers=headers, verify=False, timeout=HTTP_TIMEOUT)
+    step = {"step": "oauth_token_inspect", "response": response_debug(response)}
     try:
         data = response.json()
     except Exception:
@@ -188,7 +205,6 @@ def fetch_open_id(access_token, debug=False):
         open_id = fetch_open_id_from_oauth_inspect(access_token, diagnostics)
         if open_id:
             return open_id, None, diagnostics
-
         uid_headers = {
             "authority": "prod-api.reward.ff.garena.com",
             "accept": "application/json, text/plain, */*",
@@ -204,11 +220,8 @@ def fetch_open_id(access_token, debug=False):
             "sec-fetch-site": "same-site",
             "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         }
-        uid_res = requests.get("https://prod-api.reward.ff.garena.com/redemption/api/auth/inspect_token/", headers=uid_headers, verify=False, timeout=10)
-        uid_step = {
-            "step": "reward_inspect_token",
-            "response": response_debug(uid_res),
-        }
+        uid_res = http().get("https://prod-api.reward.ff.garena.com/redemption/api/auth/inspect_token/", headers=uid_headers, verify=False, timeout=HTTP_TIMEOUT)
+        uid_step = {"step": "reward_inspect_token", "response": response_debug(uid_res)}
         try:
             uid_data = uid_res.json()
         except Exception:
@@ -217,56 +230,21 @@ def fetch_open_id(access_token, debug=False):
         diagnostics.append(uid_step)
         uid = uid_data.get("uid")
         if not uid:
-            error = f"Failed to extract UID: inspect_http_{uid_res.status_code}"
-            return None, error, diagnostics
-
+            return None, f"Failed to extract UID: inspect_http_{uid_res.status_code}", diagnostics
         payload = {"app_id": 100067, "login_id": str(uid)}
-        shop_headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "ar-MA,ar;q=0.9,en-US;q=0.8,en;q=0.7,ar-AE;q=0.6,fr-FR;q=0.5,fr;q=0.4",
-            "Connection": "keep-alive",
-            "Content-Type": "application/json",
-            "Cookie": "source=mb; region=MA; language=ar",
-            "Origin": "https://shop2game.com",
-            "Referer": "https://shop2game.com/",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36",
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
-        }
-        topup_headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "keep-alive",
-            "Content-Type": "application/json",
-            "Origin": "https://topup.pk",
-            "Referer": "https://topup.pk/",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
-        }
-        attempts = [
-            ("shop2game", "https://shop2game.com/api/auth/player_id_login", shop_headers),
-            ("topup", "https://topup.pk/api/auth/player_id_login", topup_headers),
-        ]
+        shop_headers = {"Accept": "application/json, text/plain, */*", "Content-Type": "application/json", "Cookie": "source=mb; region=MA; language=ar", "Origin": "https://shop2game.com", "Referer": "https://shop2game.com/", "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36"}
+        topup_headers = {"Accept": "application/json, text/plain, */*", "Content-Type": "application/json", "Origin": "https://topup.pk", "Referer": "https://topup.pk/", "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"}
+        attempts = [("shop2game", "https://shop2game.com/api/auth/player_id_login", shop_headers), ("topup", "https://topup.pk/api/auth/player_id_login", topup_headers)]
         errors = []
         for label, url, headers in attempts:
-            openid_res = requests.post(url, headers=headers, json=payload, verify=False, timeout=10)
-            openid_step = {
-                "step": f"{label}_player_id_login",
-                "response": response_debug(openid_res),
-            }
+            openid_res = http().post(url, headers=headers, json=payload, verify=False, timeout=HTTP_TIMEOUT)
+            step = {"step": f"{label}_player_id_login", "response": response_debug(openid_res)}
             try:
                 openid_data = openid_res.json()
             except Exception:
                 openid_data = {}
-            openid_step["json"] = openid_data
-            diagnostics.append(openid_step)
+            step["json"] = openid_data
+            diagnostics.append(step)
             open_id = openid_data.get("open_id") or openid_data.get("openId")
             if open_id:
                 return open_id, None, diagnostics
@@ -275,6 +253,19 @@ def fetch_open_id(access_token, debug=False):
         return None, "Failed to extract open_id: " + " | ".join(errors), diagnostics
     except Exception as exc:
         return None, f"Exception occurred: {str(exc)}", diagnostics
+
+
+def platform_order_from_diagnostics(diagnostics):
+    preferred = []
+    for item in diagnostics:
+        data = item.get("json") if isinstance(item, dict) else None
+        if not isinstance(data, dict):
+            continue
+        for key in ("platform", "login_platform", "main_active_platform"):
+            value = data.get(key)
+            if isinstance(value, int) and value not in preferred:
+                preferred.append(value)
+    return list(dict.fromkeys(preferred + DEFAULT_PLATFORMS))
 
 
 def get_profile_url(region):
@@ -286,14 +277,8 @@ def get_profile_url(region):
 def fetch_profile_stats(account_id, region, token_value):
     try:
         payload = encrypt_message(pb_int(1, int(account_id)) + pb_int(2, 1))
-        headers = {
-            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-            "Authorization": f"Bearer {token_value}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-GA": "v1 1",
-            "ReleaseVersion": "OB53",
-        }
-        response = requests.post(get_profile_url(region), data=payload, headers=headers, verify=False, timeout=8)
+        headers = {"User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)", "Authorization": f"Bearer {token_value}", "Content-Type": "application/x-www-form-urlencoded", "X-GA": "v1 1", "ReleaseVersion": "OB53"}
+        response = http().post(get_profile_url(region), data=payload, headers=headers, verify=False, timeout=HTTP_TIMEOUT)
         if response.status_code != 200:
             return {}
         account_info = parse_pb_fields(response.content).get(1, [None])[0]
@@ -312,33 +297,14 @@ def make_success_response(access_token, open_id, token_value):
     account_name = decode_ff_name(raw_nickname) or unquote(raw_nickname)
     account_id = decoded.get("account_id")
     region = decoded.get("lock_region")
-    result = {
-        "access_token": access_token,
-        "account_id": account_id,
-        "account_name": account_name,
-        "open_id": open_id,
-        "platform": PLATFORM_MAP.get(external_type, f"Unknown ({external_type})"),
-        "platform_type": external_type,
-        "region": region,
-        "status": "success",
-        "token": token_value,
-    }
+    result = {"access_token": access_token, "account_id": account_id, "account_name": account_name, "open_id": open_id, "platform": PLATFORM_MAP.get(external_type, f"Unknown ({external_type})"), "platform_type": external_type, "region": region, "status": "success", "token": token_value}
     if account_id:
         result.update(fetch_profile_stats(account_id, region, token_value))
     return result
 
 
 def major_login(access_token, open_id, platform_type):
-    headers = {
-        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-        "Connection": "Keep-Alive",
-        "Accept-Encoding": "gzip",
-        "Content-Type": "application/octet-stream",
-        "Expect": "100-continue",
-        "X-Unity-Version": "2018.4.11f1",
-        "X-GA": "v1 1",
-        "ReleaseVersion": "OB53",
-    }
+    headers = {"User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)", "Connection": "Keep-Alive", "Accept-Encoding": "gzip", "Content-Type": "application/octet-stream", "Expect": "100-continue", "X-Unity-Version": "2018.4.11f1", "X-GA": "v1 1", "ReleaseVersion": "OB53"}
     game_data = my_pb2.GameData()
     game_data.timestamp = "2024-12-05 18:15:32"
     game_data.game_name = "free fire"
@@ -363,7 +329,7 @@ def major_login(access_token, open_id, platform_type):
     game_data.platform_type = int(platform_type)
     game_data.field_99 = str(platform_type)
     game_data.field_100 = str(platform_type)
-    response = requests.post(MAJOR_LOGIN_URL, data=encrypt_message(game_data.SerializeToString()), headers=headers, verify=False, timeout=8)
+    response = http().post(MAJOR_LOGIN_URL, data=encrypt_message(game_data.SerializeToString()), headers=headers, verify=False, timeout=HTTP_TIMEOUT)
     if response.status_code != 200:
         return None
     msg = output_pb2.Garena_420()
@@ -380,7 +346,7 @@ def generate_jwt_from_access(access_token, open_id=None, debug=False):
             if debug:
                 result["diagnostics"] = diagnostics
             return result, 400
-    for platform_type in DEFAULT_PLATFORMS:
+    for platform_type in platform_order_from_diagnostics(diagnostics):
         token = major_login(access_token, open_id, platform_type)
         if token:
             result = make_success_response(access_token, open_id, token)
@@ -396,16 +362,9 @@ def generate_jwt_from_access(access_token, open_id=None, debug=False):
 
 def generate_guest_account(uid, password):
     try:
-        payload = {
-            "uid": uid,
-            "password": password,
-            "response_type": "token",
-            "client_type": "2",
-            "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
-            "client_id": "100067",
-        }
+        payload = {"uid": uid, "password": password, "response_type": "token", "client_type": "2", "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3", "client_id": "100067"}
         headers = {"User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)", "Connection": "Keep-Alive", "Accept-Encoding": "gzip"}
-        oauth = requests.post("https://100067.connect.garena.com/oauth/guest/token/grant", data=payload, headers=headers, timeout=8)
+        oauth = http().post("https://100067.connect.garena.com/oauth/guest/token/grant", data=payload, headers=headers, timeout=HTTP_TIMEOUT)
         if oauth.status_code != 200:
             return {"uid": uid, "status": "error", "message": f"oauth_http_{oauth.status_code}"}
         data = oauth.json()
@@ -452,17 +411,7 @@ def get_request_param(param_name):
 
 
 def docs_response():
-    return jsonify({
-        "status": "success",
-        "web": "/web",
-        "endpoints": {
-            "/token": "GET or POST /token?access_token=ACCESS_TOKEN[&open_id=OPEN_ID][&debug=1]",
-            "/eat": "GET or POST /eat?eat_token=EAT_TOKEN_OR_URL[&debug=1]",
-            "/guest": "GET or POST /guest?uid=UID&password=PASSWORD",
-            "/bulk_guest": "POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}",
-        },
-        "platforms": PLATFORM_MAP,
-    })
+    return jsonify({"status": "success", "web": "/web", "webs": "/webs", "endpoints": {"/token": "GET or POST /token?access_token=ACCESS_TOKEN[&open_id=OPEN_ID][&debug=1]", "/eat": "GET or POST /eat?eat_token=EAT_TOKEN_OR_URL[&debug=1]", "/guest": "GET or POST /guest?uid=UID&password=PASSWORD", "/bulk_guest": "POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}"}, "platforms": PLATFORM_MAP})
 
 
 @app.route("/", methods=["GET"])
@@ -477,7 +426,12 @@ def api_docs():
 
 @app.route("/web", methods=["GET"])
 def web():
-    return render_template_string(WEB_HTML)
+    return redirect("/webs")
+
+
+@app.route("/webs", methods=["GET"])
+def webs():
+    return render_template_string(WEBS_HTML)
 
 
 @app.route("/token", methods=["GET", "POST"])
