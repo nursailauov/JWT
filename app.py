@@ -152,8 +152,43 @@ def get_access_token_from_eat(eat_token):
         return None
 
 
-def fetch_open_id(access_token):
+def response_debug(response, body_limit=300):
+    text = response.text or ""
+    preview = text[:body_limit]
+    return {
+        "status_code": response.status_code,
+        "url": response.url,
+        "content_type": response.headers.get("content-type"),
+        "server": response.headers.get("server"),
+        "captcha_detected": "captcha" in preview.lower() or "captcha-delivery" in preview.lower(),
+        "body_preview": preview,
+    }
+
+
+def fetch_open_id_from_oauth_inspect(access_token, diagnostics):
+    inspect_url = "https://100067.connect.garena.com/oauth/token/inspect"
+    headers = {"User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)"}
+    response = requests.get(inspect_url, params={"token": access_token}, headers=headers, verify=False, timeout=10)
+    step = {
+        "step": "oauth_token_inspect",
+        "response": response_debug(response),
+    }
     try:
+        data = response.json()
+    except Exception:
+        data = {}
+    step["json"] = data
+    diagnostics.append(step)
+    return data.get("open_id") or data.get("openId")
+
+
+def fetch_open_id(access_token, debug=False):
+    diagnostics = []
+    try:
+        open_id = fetch_open_id_from_oauth_inspect(access_token, diagnostics)
+        if open_id:
+            return open_id, None, diagnostics
+
         uid_headers = {
             "authority": "prod-api.reward.ff.garena.com",
             "accept": "application/json, text/plain, */*",
@@ -170,13 +205,20 @@ def fetch_open_id(access_token):
             "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         }
         uid_res = requests.get("https://prod-api.reward.ff.garena.com/redemption/api/auth/inspect_token/", headers=uid_headers, verify=False, timeout=10)
+        uid_step = {
+            "step": "reward_inspect_token",
+            "response": response_debug(uid_res),
+        }
         try:
             uid_data = uid_res.json()
         except Exception:
-            return None, f"Failed to extract UID: inspect_http_{uid_res.status_code}"
+            uid_data = {}
+        uid_step["json"] = uid_data
+        diagnostics.append(uid_step)
         uid = uid_data.get("uid")
         if not uid:
-            return None, f"Failed to extract UID: inspect_http_{uid_res.status_code}"
+            error = f"Failed to extract UID: inspect_http_{uid_res.status_code}"
+            return None, error, diagnostics
 
         payload = {"app_id": 100067, "login_id": str(uid)}
         shop_headers = {
@@ -215,18 +257,24 @@ def fetch_open_id(access_token):
         errors = []
         for label, url, headers in attempts:
             openid_res = requests.post(url, headers=headers, json=payload, verify=False, timeout=10)
+            openid_step = {
+                "step": f"{label}_player_id_login",
+                "response": response_debug(openid_res),
+            }
             try:
                 openid_data = openid_res.json()
             except Exception:
                 openid_data = {}
+            openid_step["json"] = openid_data
+            diagnostics.append(openid_step)
             open_id = openid_data.get("open_id") or openid_data.get("openId")
             if open_id:
-                return open_id, None
+                return open_id, None, diagnostics
             detail = openid_data.get("error") or openid_data.get("message") or openid_res.text[:80]
             errors.append(f"{label}_http_{openid_res.status_code}:{detail}")
-        return None, "Failed to extract open_id: " + " | ".join(errors)
+        return None, "Failed to extract open_id: " + " | ".join(errors), diagnostics
     except Exception as exc:
-        return None, f"Exception occurred: {str(exc)}"
+        return None, f"Exception occurred: {str(exc)}", diagnostics
 
 
 def get_profile_url(region):
@@ -323,16 +371,27 @@ def major_login(access_token, open_id, platform_type):
     return getattr(msg, "token", None)
 
 
-def generate_jwt_from_access(access_token, open_id=None):
+def generate_jwt_from_access(access_token, open_id=None, debug=False):
+    diagnostics = []
     if not open_id:
-        open_id, error = fetch_open_id(access_token)
+        open_id, error, diagnostics = fetch_open_id(access_token, debug=debug)
         if error:
-            return {"status": "error", "message": error}, 400
+            result = {"status": "error", "message": error}
+            if debug:
+                result["diagnostics"] = diagnostics
+            return result, 400
     for platform_type in DEFAULT_PLATFORMS:
         token = major_login(access_token, open_id, platform_type)
         if token:
-            return make_success_response(access_token, open_id, token), 200
-    return {"status": "error", "message": "No valid platform found"}, 400
+            result = make_success_response(access_token, open_id, token)
+            if debug:
+                result["diagnostics"] = diagnostics
+                result["platform_type_used"] = platform_type
+            return result, 200
+    result = {"status": "error", "message": "No valid platform found"}
+    if debug:
+        result["diagnostics"] = diagnostics
+    return result, 400
 
 
 def generate_guest_account(uid, password):
@@ -397,8 +456,8 @@ def docs_response():
         "status": "success",
         "web": "/web",
         "endpoints": {
-            "/token": "GET or POST /token?access_token=ACCESS_TOKEN[&open_id=OPEN_ID]",
-            "/eat": "GET or POST /eat?eat_token=EAT_TOKEN_OR_URL",
+            "/token": "GET or POST /token?access_token=ACCESS_TOKEN[&open_id=OPEN_ID][&debug=1]",
+            "/eat": "GET or POST /eat?eat_token=EAT_TOKEN_OR_URL[&debug=1]",
             "/guest": "GET or POST /guest?uid=UID&password=PASSWORD",
             "/bulk_guest": "POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}",
         },
@@ -425,15 +484,17 @@ def web():
 def token_endpoint():
     access_token = get_request_param("access_token")
     open_id = get_request_param("open_id")
+    debug = str(get_request_param("debug") or "").lower() in {"1", "true", "yes"}
     if not access_token or not str(access_token).strip():
         return jsonify({"status": "error", "message": "access_token required"}), 400
-    result, status_code = generate_jwt_from_access(str(access_token).strip(), str(open_id).strip() if open_id else None)
+    result, status_code = generate_jwt_from_access(str(access_token).strip(), str(open_id).strip() if open_id else None, debug=debug)
     return jsonify(result), status_code
 
 
 @app.route("/eat", methods=["GET", "POST"])
 def eat_endpoint():
     eat_input = get_request_param("eat_token") or get_request_param("eat") or get_request_param("url")
+    debug = str(get_request_param("debug") or "").lower() in {"1", "true", "yes"}
     if not eat_input or not str(eat_input).strip():
         return jsonify({"status": "error", "message": "eat_token required"}), 400
     eat_token = extract_eat_token(eat_input)
@@ -442,7 +503,7 @@ def eat_endpoint():
     access_token = get_access_token_from_eat(eat_token)
     if not access_token:
         return jsonify({"status": "error", "message": "failed to resolve access_token"}), 400
-    result, status_code = generate_jwt_from_access(access_token)
+    result, status_code = generate_jwt_from_access(access_token, debug=debug)
     if isinstance(result, dict):
         result["eat_token"] = eat_token
     return jsonify(result), status_code
