@@ -20,16 +20,25 @@ CORS(app)
 AES_KEY = b'Yg&tc%DEuh6%Zc^8'
 AES_IV = b'6oyZDr22E3ychjM%'
 MAJOR_LOGIN_URL = "https://loginbp.ggpolarbear.com/MajorLogin"
-
 PLATFORM_MAP = {3: "Facebook", 4: "Guest", 5: "VK", 6: "Huawei", 8: "Google", 11: "X (Twitter)", 13: "AppleId"}
 DEFAULT_PLATFORMS = [3, 4, 5, 6, 8, 11, 13]
 
-INDEX_HTML = """
+WEB_HTML = r'''
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JWT Account Checker</title>
-<style>:root{color-scheme:dark;--bg:#0b0f17;--panel:#121925;--panel2:#0f1520;--line:#253247;--text:#e8eef8;--muted:#8fa0b8;--ok:#43d17a;--bad:#ff6473;--warn:#f5c15b;--accent:#4ea1ff}*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}.wrap{max-width:1180px;margin:0 auto;padding:28px 16px 40px}header{margin-bottom:18px}h1{margin:0;font-size:clamp(26px,4vw,42px);letter-spacing:0}.sub{color:var(--muted);margin-top:6px}.grid{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:14px;align-items:start}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:13px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}.panel-title{font-weight:700}textarea{width:100%;min-height:430px;resize:vertical;border:0;outline:0;padding:14px;background:#0a0f18;color:var(--text);font:13px/1.45 Consolas,monospace}.actions{display:flex;gap:10px;padding:12px;border-top:1px solid var(--line)}button{border:1px solid var(--line);background:#172235;color:var(--text);border-radius:7px;padding:10px 13px;cursor:pointer;font-weight:700}button.primary{background:var(--accent);border-color:var(--accent);color:#06111f}button:disabled{opacity:.55;cursor:not-allowed}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px}.stat b{display:block;font-size:22px;margin-bottom:3px}.stat span{color:var(--muted);font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 11px;border-bottom:1px solid var(--line);vertical-align:middle}th{color:var(--muted);background:var(--panel2);position:sticky;top:0;z-index:1}.table-wrap{max-height:560px;overflow:auto}.badge{display:inline-flex;align-items:center;min-width:58px;justify-content:center;padding:4px 7px;border-radius:999px;background:#1b2840;color:var(--muted);font-weight:700}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.small{color:var(--muted);font-size:12px}.status{padding:10px 12px;color:var(--muted);border-top:1px solid var(--line);min-height:39px}@media(max-width:860px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}</style></head>
-<body><div class="wrap"><header><h1>JWT Account Checker</h1><div class="sub">Пакетная проверка guest аккаунтов: уровень, лайки, регион и статус.</div></header><div class="grid"><section class="panel"><div class="panel-head"><div class="panel-title">Аккаунты</div><div class="small" id="lineCount">0 строк</div></div><textarea id="accounts" spellcheck="false" placeholder="4305390755:password\n4442030961:password"></textarea><div class="actions"><button class="primary" id="checkBtn">Проверить</button><button id="clearBtn">Очистить</button></div><div class="status" id="status">Готово.</div></section><main><div class="stats"><div class="stat"><b id="total">0</b><span>Всего</span></div><div class="stat"><b id="ok">0</b><span>Рабочие</span></div><div class="stat"><b id="lvl22">0</b><span>Уровень 22+</span></div><div class="stat"><b id="bad">0</b><span>Ошибки</span></div></div><section class="panel"><div class="panel-head"><div class="panel-title">Результаты</div><button id="copyBtn">Скопировать JSON</button></div><div class="table-wrap"><table><thead><tr><th>#</th><th>UID</th><th>Уровень</th><th>Лайки</th><th>Регион</th><th>Имя</th><th>Статус</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="small">Результатов пока нет.</td></tr></tbody></table></div></section></main></div></div>
-<script>const $=id=>document.getElementById(id);let lastResults=[];function lines(){return $('accounts').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}function updateCount(){$('lineCount').textContent=`${lines().length} строк`}function setStatus(t){$('status').textContent=t}function render(data){lastResults=data.results||[];const ok=lastResults.filter(r=>r.status==='success');$('total').textContent=lastResults.length;$('ok').textContent=ok.length;$('lvl22').textContent=ok.filter(r=>Number(r.level||0)>=22).length;$('bad').textContent=lastResults.length-ok.length;if(!lastResults.length){$('rows').innerHTML='<tr><td colspan="7" class="small">Результатов пока нет.</td></tr>';return}$('rows').innerHTML=lastResults.map((r,i)=>{const level=r.level==null?'-':r.level;const cls=Number(level)>=22?'ok':(level==='-'?'':'warn');const st=r.status==='success'?'<span class="ok">success</span>':`<span class="bad">${r.message||'error'}</span>`;return `<tr><td>${i+1}</td><td>${r.uid||r.raw||'-'}</td><td><span class="badge ${cls}">${level}</span></td><td>${r.likes??'-'}</td><td>${r.region||'-'}</td><td>${r.account_name||'-'}</td><td>${st}</td></tr>`}).join('')}async function check(){const raw=$('accounts').value.trim();if(!raw){setStatus('Вставь аккаунты в формате uid:password.');return}$('checkBtn').disabled=true;setStatus('Проверка аккаунтов...');render({results:[]});try{const res=await fetch('/bulk_guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:raw})});const data=await res.json();if(!res.ok){setStatus(data.message||'Ошибка проверки.');return}render(data);setStatus(`Готово: ${data.success||0}/${data.total||0} рабочих.`)}catch(e){setStatus('Ошибка запроса: '+e.message)}finally{$('checkBtn').disabled=false}}$('accounts').addEventListener('input',updateCount);$('checkBtn').addEventListener('click',check);$('clearBtn').addEventListener('click',()=>{$('accounts').value='';updateCount();render({results:[]});setStatus('Очищено.')});$('copyBtn').addEventListener('click',async()=>{await navigator.clipboard.writeText(JSON.stringify(lastResults,null,2));setStatus('JSON скопирован.')});updateCount();</script></body></html>
-"""
+<style>:root{color-scheme:dark;--bg:#0b0f17;--panel:#121925;--panel2:#0f1520;--line:#253247;--text:#e8eef8;--muted:#8fa0b8;--ok:#43d17a;--bad:#ff6473;--warn:#f5c15b;--accent:#4ea1ff}*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}.wrap{max-width:1180px;margin:0 auto;padding:28px 16px 40px}h1{margin:0;font-size:clamp(26px,4vw,42px);letter-spacing:0}.sub{color:var(--muted);margin:6px 0 18px}.grid{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:14px;align-items:start}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:13px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}.panel-title{font-weight:700}textarea{width:100%;min-height:430px;resize:vertical;border:0;outline:0;padding:14px;background:#0a0f18;color:var(--text);font:13px/1.45 Consolas,monospace}.actions{display:flex;gap:10px;padding:12px;border-top:1px solid var(--line)}button{border:1px solid var(--line);background:#172235;color:var(--text);border-radius:7px;padding:10px 13px;cursor:pointer;font-weight:700}button.primary{background:var(--accent);border-color:var(--accent);color:#06111f}button:disabled{opacity:.55;cursor:not-allowed}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px}.stat b{display:block;font-size:22px;margin-bottom:3px}.stat span{color:var(--muted);font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 11px;border-bottom:1px solid var(--line);vertical-align:middle}th{color:var(--muted);background:var(--panel2);position:sticky;top:0;z-index:1}.table-wrap{max-height:560px;overflow:auto}.badge{display:inline-flex;align-items:center;min-width:58px;justify-content:center;padding:4px 7px;border-radius:999px;background:#1b2840;color:var(--muted);font-weight:700}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.small{color:var(--muted);font-size:12px}.status{padding:10px 12px;color:var(--muted);border-top:1px solid var(--line);min-height:39px}@media(max-width:860px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}</style></head>
+<body><div class="wrap"><h1>JWT Account Checker</h1><div class="sub">Проверка guest аккаунтов: уровень, лайки, регион и статус. Вставь строки uid:password.</div><div class="grid"><section class="panel"><div class="panel-head"><div class="panel-title">Аккаунты</div><div class="small" id="lineCount">0 строк</div></div><textarea id="accounts" spellcheck="false" placeholder="4305390755:password&#10;4442030961:password"></textarea><div class="actions"><button class="primary" id="checkBtn">Проверить</button><button id="clearBtn">Очистить</button></div><div class="status" id="status">Ожидает проверки.</div></section><main><div class="stats"><div class="stat"><b id="total">0</b><span>Всего</span></div><div class="stat"><b id="ok">0</b><span>Рабочие</span></div><div class="stat"><b id="lvl22">0</b><span>Уровень 22+</span></div><div class="stat"><b id="bad">0</b><span>Ошибки</span></div></div><section class="panel"><div class="panel-head"><div class="panel-title">Результаты</div><button id="copyBtn">Скопировать JSON</button></div><div class="table-wrap"><table><thead><tr><th>#</th><th>UID</th><th>Уровень</th><th>Лайки</th><th>Регион</th><th>Имя</th><th>Статус</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="small">Результатов пока нет.</td></tr></tbody></table></div></section></main></div></div>
+<script>
+const $=id=>document.getElementById(id);let results=[];let running=false;
+function parseLines(){return $('accounts').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).map(line=>{const p=line.indexOf(':');return p<0?{raw:line,status:'error',message:'invalid_format'}:{uid:line.slice(0,p).trim(),password:line.slice(p+1).trim(),status:'pending'}})}
+function updateCount(){$('lineCount').textContent=`${parseLines().length} строк`}
+function setStatus(t){$('status').textContent=t}
+function esc(v){return String(v??'-').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function draw(){const ok=results.filter(r=>r.status==='success');$('total').textContent=results.length;$('ok').textContent=ok.length;$('lvl22').textContent=ok.filter(r=>Number(r.level||0)>=22).length;$('bad').textContent=results.filter(r=>r.status==='error').length;if(!results.length){$('rows').innerHTML='<tr><td colspan="7" class="small">Результатов пока нет.</td></tr>';return}$('rows').innerHTML=results.map((r,i)=>{const level=r.level==null?'-':r.level;const cls=Number(level)>=22?'ok':(level==='-'?'':'warn');const st=r.status==='success'?'<span class="ok">success</span>':(r.status==='pending'?'<span class="warn">pending</span>':`<span class="bad">${esc(r.message||'error')}</span>`);return `<tr><td>${i+1}</td><td>${esc(r.uid||r.raw)}</td><td><span class="badge ${cls}">${esc(level)}</span></td><td>${esc(r.likes)}</td><td>${esc(r.region)}</td><td>${esc(r.account_name)}</td><td>${st}</td></tr>`}).join('')}
+async function checkOne(item,index){if(!item.uid||!item.password){results[index]={...item,status:'error',message:'invalid_format'};draw();return}try{const res=await fetch('/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:item.uid,password:item.password})});const data=await res.json();results[index]={...data,uid:item.uid,status:data.status||'error'};}catch(e){results[index]={uid:item.uid,status:'error',message:e.message}}draw();}
+async function check(){if(running)return;const items=parseLines();if(!items.length){setStatus('Вставь аккаунты в формате uid:password.');return}running=true;$('checkBtn').disabled=true;results=items.map(x=>({...x,status:x.status==='error'?'error':'pending'}));draw();let done=0;setStatus(`Проверка: 0/${items.length}`);let next=0;async function worker(){while(next<items.length){const i=next++;await checkOne(items[i],i);done++;setStatus(`Проверка: ${done}/${items.length}`)}}await Promise.all(Array.from({length:Math.min(4,items.length)},worker));setStatus(`Готово: ${results.filter(r=>r.status==='success').length}/${items.length} рабочих.`);running=false;$('checkBtn').disabled=false;}
+$('accounts').addEventListener('input',updateCount);$('checkBtn').addEventListener('click',check);$('clearBtn').addEventListener('click',()=>{if(running)return;$('accounts').value='';results=[];updateCount();draw();setStatus('Ожидает проверки.')});$('copyBtn').addEventListener('click',async()=>{await navigator.clipboard.writeText(JSON.stringify(results,null,2));setStatus('JSON скопирован.')});updateCount();
+</script></body></html>
+'''
 
 
 def encrypt_message(plaintext):
@@ -72,7 +81,7 @@ def parse_pb_fields(data):
     while index < len(data):
         key, index = read_varint(data, index)
         if key is None: break
-        field_number = key >> 3; wire_type = key & 7; value = None
+        field_number = key >> 3; wire_type = key & 7
         if wire_type == 0: value, index = read_varint(data, index)
         elif wire_type == 1: value = data[index:index + 8]; index += 8
         elif wire_type == 2:
@@ -104,7 +113,7 @@ def fetch_profile_stats(account_id, region, token_value):
     try:
         payload = encrypt_message(pb_int(1, int(account_id)) + pb_int(2, 1))
         headers = {"User-Agent":"Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)","Authorization":f"Bearer {token_value}","Content-Type":"application/x-www-form-urlencoded","X-GA":"v1 1","ReleaseVersion":"OB53"}
-        response = requests.post(get_profile_url(region), data=payload, headers=headers, verify=False, timeout=10)
+        response = requests.post(get_profile_url(region), data=payload, headers=headers, verify=False, timeout=8)
         if response.status_code != 200: return {}
         account_info = parse_pb_fields(response.content).get(1, [None])[0]
         if not isinstance(account_info, (bytes, bytearray)): return {}
@@ -139,7 +148,7 @@ def generate_guest_account(uid, password):
     try:
         payload = {"uid":uid,"password":password,"response_type":"token","client_type":"2","client_secret":"2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3","client_id":"100067"}
         headers = {"User-Agent":"GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)","Connection":"Keep-Alive","Accept-Encoding":"gzip"}
-        oauth = requests.post("https://100067.connect.garena.com/oauth/guest/token/grant", data=payload, headers=headers, timeout=10)
+        oauth = requests.post("https://100067.connect.garena.com/oauth/guest/token/grant", data=payload, headers=headers, timeout=8)
         if oauth.status_code != 200: return {"uid":uid,"status":"error","message":f"oauth_http_{oauth.status_code}"}
         data = oauth.json(); access_token = data.get("access_token"); open_id = data.get("open_id")
         if not access_token or not open_id: return {"uid":uid,"status":"error","message":"missing_access_token_or_open_id"}
@@ -148,19 +157,6 @@ def generate_guest_account(uid, password):
         result = make_success_response(access_token, open_id, token); result["uid"] = str(uid); return result
     except Exception as exc:
         return {"uid":uid,"status":"error","message":str(exc)}
-
-
-def fetch_open_id(access_token):
-    return None, "open_id lookup unavailable"
-
-
-def internal_generate_jwt(access_token):
-    open_id, error = fetch_open_id(access_token)
-    if error: return {"status":"error","message":error}, 400
-    for platform_type in DEFAULT_PLATFORMS:
-        token = major_login(access_token, open_id, platform_type)
-        if token: return make_success_response(access_token, open_id, token), 200
-    return {"status":"error","message":"No valid platform found."}, 400
 
 
 def parse_accounts(raw):
@@ -183,7 +179,7 @@ def get_request_param(param_name):
 
 
 def docs_response():
-    return jsonify({"status":"success","web":"/web","endpoints":{"/token":"GET or POST /token?access_token=YOUR_ACCESS_TOKEN","/guest":"GET or POST /guest?uid=UID&password=PASSWORD","/bulk_guest":"POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}","/eat":"GET or POST /eat?eat_token=EAT_TOKEN_OR_URL"},"platforms":PLATFORM_MAP})
+    return jsonify({"status":"success","web":"/web","endpoints":{"/guest":"GET or POST /guest?uid=UID&password=PASSWORD","/bulk_guest":"POST /bulk_guest with JSON {accounts: 'uid:password\\nuid:password'}"},"platforms":PLATFORM_MAP})
 
 
 @app.route("/", methods=["GET"])
@@ -195,7 +191,7 @@ def api_docs(): return docs_response()
 
 
 @app.route("/web", methods=["GET"])
-def web(): return render_template_string(INDEX_HTML)
+def web(): return render_template_string(WEB_HTML)
 
 
 @app.route("/bulk_guest", methods=["POST"])
@@ -206,7 +202,7 @@ def bulk_guest_endpoint():
     invalid = [item for item in parsed if item.get("status") == "error"]
     valid = [item for item in parsed if item.get("uid") and item.get("password")]
     results = list(invalid)
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(generate_guest_account, item["uid"], item["password"]) for item in valid]
         for future in as_completed(futures): results.append(future.result())
     results.sort(key=lambda item: int(item.get("uid", "0")) if str(item.get("uid", "0")).isdigit() else 0)
@@ -214,29 +210,11 @@ def bulk_guest_endpoint():
     return jsonify({"total":len(results),"success":success,"failed":len(results)-success,"results":results})
 
 
-@app.route("/token", methods=["GET", "POST"])
-def token_endpoint():
-    access_token = get_request_param("access_token")
-    if not access_token or access_token.strip() == "": return jsonify({"status":"error","message":"access_token required"}), 400
-    result, status_code = internal_generate_jwt(access_token.strip()); return jsonify(result), status_code
-
-
 @app.route("/guest", methods=["GET", "POST"])
 def guest_endpoint():
     uid = get_request_param("uid"); password = get_request_param("password")
     if not uid or not password: return jsonify({"status":"error","message":"uid and password required"}), 400
     result = generate_guest_account(uid, password); return jsonify(result), 200 if result.get("status") == "success" else 400
-
-
-@app.route("/eat", methods=["GET", "POST"])
-def eat_endpoint():
-    eat_input = get_request_param("eat_token")
-    if not eat_input or eat_input.strip() == "": return jsonify({"status":"error","message":"eat_token required"}), 400
-    eat_token = extract_eat_token(eat_input)
-    if not eat_token: return jsonify({"status":"error","message":"invalid eat_token"}), 400
-    access_token = get_access_token_from_eat(eat_token)
-    if not access_token: return jsonify({"status":"error","message":"failed to resolve access_token"}), 400
-    result, status_code = internal_generate_jwt(access_token); return jsonify(result), status_code
 
 
 if __name__ == "__main__": app.run(host="0.0.0.0", port=1080, debug=False)
