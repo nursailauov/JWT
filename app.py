@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import jwt
 import urllib3
@@ -30,6 +31,124 @@ PLATFORM_MAP = {
     13: "AppleId",
 }
 DEFAULT_PLATFORMS = [3, 4, 5, 6, 8, 11, 13]
+
+INDEX_HTML = """
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JWT Account Checker</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0f17; --panel:#121925; --panel2:#0f1520; --line:#253247; --text:#e8eef8; --muted:#8fa0b8; --ok:#43d17a; --bad:#ff6473; --warn:#f5c15b; --accent:#4ea1ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Inter, Segoe UI, Arial, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 40px; }
+    header { display:flex; justify-content:space-between; gap:16px; align-items:flex-end; margin-bottom:18px; }
+    h1 { margin:0; font-size: clamp(26px, 4vw, 42px); letter-spacing:0; }
+    .sub { color:var(--muted); margin-top:6px; }
+    .grid { display:grid; grid-template-columns: minmax(320px, 420px) 1fr; gap:14px; align-items:start; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    .panel-head { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:13px 14px; border-bottom:1px solid var(--line); background:var(--panel2); }
+    .panel-title { font-weight:700; }
+    textarea { width:100%; min-height:430px; resize:vertical; border:0; outline:0; padding:14px; background:#0a0f18; color:var(--text); font: 13px/1.45 Consolas, monospace; }
+    .actions { display:flex; gap:10px; padding:12px; border-top:1px solid var(--line); }
+    button { border:1px solid var(--line); background:#172235; color:var(--text); border-radius:7px; padding:10px 13px; cursor:pointer; font-weight:700; }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#06111f; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .stats { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+    .stat { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:13px; }
+    .stat b { display:block; font-size:22px; margin-bottom:3px; }
+    .stat span { color:var(--muted); font-size:13px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:10px 11px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    th { color:var(--muted); background:var(--panel2); position:sticky; top:0; z-index:1; }
+    .table-wrap { max-height:560px; overflow:auto; }
+    .badge { display:inline-flex; align-items:center; min-width:58px; justify-content:center; padding:4px 7px; border-radius:999px; background:#1b2840; color:var(--muted); font-weight:700; }
+    .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+    .small { color:var(--muted); font-size:12px; }
+    .status { padding:10px 12px; color:var(--muted); border-top:1px solid var(--line); min-height:39px; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, minmax(0,1fr)); } header { display:block; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>JWT Account Checker</h1>
+        <div class="sub">Пакетная проверка guest аккаунтов: уровень, лайки, регион и токен.</div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Аккаунты</div><div class="small" id="lineCount">0 строк</div></div>
+        <textarea id="accounts" spellcheck="false" placeholder="4305390755:password\n4442030961:password"></textarea>
+        <div class="actions">
+          <button class="primary" id="checkBtn">Проверить</button>
+          <button id="clearBtn">Очистить</button>
+        </div>
+        <div class="status" id="status">Готово.</div>
+      </section>
+
+      <main>
+        <div class="stats">
+          <div class="stat"><b id="total">0</b><span>Всего</span></div>
+          <div class="stat"><b id="ok">0</b><span>Рабочие</span></div>
+          <div class="stat"><b id="lvl22">0</b><span>Уровень 22+</span></div>
+          <div class="stat"><b id="bad">0</b><span>Ошибки</span></div>
+        </div>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">Результаты</div><button id="copyBtn">Скопировать JSON</button></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>UID</th><th>Уровень</th><th>Лайки</th><th>Регион</th><th>Имя</th><th>Статус</th></tr></thead>
+              <tbody id="rows"><tr><td colspan="7" class="small">Результатов пока нет.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+<script>
+const $ = (id) => document.getElementById(id);
+let lastResults = [];
+function lines() { return $('accounts').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean); }
+function updateCount() { $('lineCount').textContent = `${lines().length} строк`; }
+function setStatus(text) { $('status').textContent = text; }
+function render(data) {
+  lastResults = data.results || [];
+  const ok = lastResults.filter(r => r.status === 'success');
+  $('total').textContent = lastResults.length;
+  $('ok').textContent = ok.length;
+  $('lvl22').textContent = ok.filter(r => Number(r.level || 0) >= 22).length;
+  $('bad').textContent = lastResults.length - ok.length;
+  if (!lastResults.length) { $('rows').innerHTML = '<tr><td colspan="7" class="small">Результатов пока нет.</td></tr>'; return; }
+  $('rows').innerHTML = lastResults.map((r, i) => {
+    const level = r.level == null ? '-' : r.level;
+    const levelClass = Number(level) >= 22 ? 'ok' : (level === '-' ? '' : 'warn');
+    const status = r.status === 'success' ? '<span class="ok">success</span>' : `<span class="bad">${r.message || 'error'}</span>`;
+    return `<tr><td>${i+1}</td><td>${r.uid || '-'}</td><td><span class="badge ${levelClass}">${level}</span></td><td>${r.likes ?? '-'}</td><td>${r.region || '-'}</td><td>${r.account_name || '-'}</td><td>${status}</td></tr>`;
+  }).join('');
+}
+$('accounts').addEventListener('input', updateCount);
+$('clearBtn').addEventListener('click', () => { $('accounts').value=''; updateCount(); render({results:[]}); setStatus('Очищено.'); });
+$('copyBtn').addEventListener('click', async () => { await navigator.clipboard.writeText(JSON.stringify(lastResults, null, 2)); setStatus('JSON скопирован.'); });
+$('checkBtn').addEventListener('click', async () => {
+  const raw = $('accounts').value.trim();
+  if (!raw) { setStatus('Вставь аккаунты в формате uid:password.'); return; }
+  $('checkBtn').disabled = true; setStatus('Проверка аккаунтов...'); render({results:[]});
+  try {
+    const res = await fetch('/bulk_guest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({accounts: raw}) });
+    const data = await res.json(); render(data); setStatus(`Готово: ${data.success || 0}/${data.total || 0} рабочих.`);
+  } catch (e) { setStatus('Ошибка запроса: ' + e.message); }
+  finally { $('checkBtn').disabled = false; }
+});
+updateCount();
+</script>
+</body>
+</html>
+"""
 
 
 def decode_ff_name(b64_str):
@@ -280,11 +399,7 @@ def make_success_response(access_token, open_id, token_value):
     return result
 
 
-def internal_generate_jwt(access_token):
-    open_id, error = fetch_open_id(access_token)
-    if error:
-        return {"status": "error", "message": error}, 400
-
+def major_login(access_token, open_id, platform_type):
     headers = {
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
         "Connection": "Keep-Alive",
@@ -295,22 +410,80 @@ def internal_generate_jwt(access_token):
         "X-GA": "v1 1",
         "ReleaseVersion": "OB53",
     }
+    encrypted_data = encrypt_message(build_game_data(access_token, open_id, platform_type))
+    response = requests.post(MAJOR_LOGIN_URL, data=encrypted_data, headers=headers, verify=False, timeout=8)
+    if response.status_code != 200:
+        return None
+    example_msg = output_pb2.Garena_420()
+    example_msg.ParseFromString(response.content)
+    return getattr(example_msg, "token", None)
 
+
+def generate_guest_account(uid, password):
+    oauth_url = "https://100067.connect.garena.com/oauth/guest/token/grant"
+    payload = {
+        "uid": uid,
+        "password": password,
+        "response_type": "token",
+        "client_type": "2",
+        "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
+        "client_id": "100067",
+    }
+    headers = {
+        "User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)",
+        "Connection": "Keep-Alive",
+        "Accept-Encoding": "gzip",
+    }
+    try:
+        oauth_response = requests.post(oauth_url, data=payload, headers=headers, timeout=10)
+        if oauth_response.status_code != 200:
+            return {"uid": uid, "status": "error", "message": f"oauth_http_{oauth_response.status_code}"}
+        oauth_data = oauth_response.json()
+        access_token = oauth_data.get("access_token")
+        open_id = oauth_data.get("open_id")
+        if not access_token or not open_id:
+            return {"uid": uid, "status": "error", "message": "missing_access_token_or_open_id"}
+        token_value = major_login(access_token, open_id, 4)
+        if not token_value:
+            return {"uid": uid, "status": "error", "message": "no_jwt_token"}
+        result = make_success_response(access_token, open_id, token_value)
+        result["uid"] = str(uid)
+        return result
+    except Exception as exc:
+        return {"uid": uid, "status": "error", "message": str(exc)}
+
+
+def internal_generate_jwt(access_token):
+    open_id, error = fetch_open_id(access_token)
+    if error:
+        return {"status": "error", "message": error}, 400
     for platform_type in DEFAULT_PLATFORMS:
         try:
-            encrypted_data = encrypt_message(build_game_data(access_token, open_id, platform_type))
-            response = requests.post(MAJOR_LOGIN_URL, data=encrypted_data, headers=headers, verify=False, timeout=8)
-            if response.status_code != 200:
-                continue
-            example_msg = output_pb2.Garena_420()
-            example_msg.ParseFromString(response.content)
-            token_value = getattr(example_msg, "token", None)
+            token_value = major_login(access_token, open_id, platform_type)
             if token_value:
                 return make_success_response(access_token, open_id, token_value), 200
         except Exception:
             continue
-
     return {"status": "error", "message": "No valid platform found."}, 400
+
+
+def parse_accounts(raw):
+    accounts = []
+    for line in str(raw or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            accounts.append({"raw": line, "status": "error", "message": "invalid_format"})
+            continue
+        uid, password = line.split(":", 1)
+        uid = uid.strip()
+        password = password.strip()
+        if not uid or not password:
+            accounts.append({"raw": line, "status": "error", "message": "invalid_format"})
+            continue
+        accounts.append({"uid": uid, "password": password})
+    return accounts
 
 
 def get_request_param(param_name):
@@ -322,6 +495,10 @@ def get_request_param(param_name):
 
 
 @app.route("/", methods=["GET"])
+def index():
+    return render_template_string(INDEX_HTML)
+
+
 @app.route("/api", methods=["GET"])
 def api_docs():
     return jsonify({
@@ -329,10 +506,27 @@ def api_docs():
         "endpoints": {
             "/token": "/token?access_token=YOUR_ACCESS_TOKEN",
             "/guest": "/guest?uid=UID&password=PASSWORD",
+            "/bulk_guest": "POST accounts=uid:password lines",
             "/eat": "/eat?eat_token=EAT_TOKEN_OR_URL",
         },
         "platforms": PLATFORM_MAP,
     }), 200
+
+
+@app.route("/bulk_guest", methods=["POST"])
+def bulk_guest_endpoint():
+    raw = get_request_param("accounts")
+    parsed = parse_accounts(raw)
+    invalid = [item for item in parsed if item.get("status") == "error"]
+    valid = [item for item in parsed if item.get("uid") and item.get("password")]
+    results = list(invalid)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(generate_guest_account, item["uid"], item["password"]) for item in valid]
+        for future in as_completed(futures):
+            results.append(future.result())
+    results.sort(key=lambda item: int(item.get("uid", "0")) if str(item.get("uid", "0")).isdigit() else 0)
+    success = sum(1 for item in results if item.get("status") == "success")
+    return jsonify({"total": len(results), "success": success, "failed": len(results) - success, "results": results})
 
 
 @app.route("/token", methods=["GET", "POST"])
@@ -350,59 +544,8 @@ def guest_endpoint():
     password = get_request_param("password")
     if not uid or not password:
         return jsonify({"status": "error", "message": "uid and password required"}), 400
-
-    oauth_url = "https://100067.connect.garena.com/oauth/guest/token/grant"
-    payload = {
-        "uid": uid,
-        "password": password,
-        "response_type": "token",
-        "client_type": "2",
-        "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
-        "client_id": "100067",
-    }
-    headers = {
-        "User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)",
-        "Connection": "Keep-Alive",
-        "Accept-Encoding": "gzip",
-    }
-    try:
-        oauth_response = requests.post(oauth_url, data=payload, headers=headers, timeout=10)
-    except requests.RequestException as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 500
-
-    if oauth_response.status_code != 200:
-        try:
-            data = oauth_response.json()
-        except ValueError:
-            data = {"message": oauth_response.text}
-        data["status"] = "error"
-        return jsonify(data), oauth_response.status_code
-
-    oauth_data = oauth_response.json()
-    if "access_token" not in oauth_data or "open_id" not in oauth_data:
-        return jsonify({"status": "error", "message": "OAuth response missing access_token or open_id"}), 500
-
-    try:
-        encrypted_data = encrypt_message(build_game_data(oauth_data["access_token"], oauth_data["open_id"], 4))
-        headers_major = {
-            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/octet-stream",
-            "Expect": "100-continue",
-            "X-Unity-Version": "2018.4.11f1",
-            "X-GA": "v1 1",
-            "ReleaseVersion": "OB53",
-        }
-        response = requests.post(MAJOR_LOGIN_URL, data=encrypted_data, headers=headers_major, verify=False, timeout=8)
-        example_msg = output_pb2.Garena_420()
-        example_msg.ParseFromString(response.content)
-        token_value = getattr(example_msg, "token", None)
-        if not token_value:
-            return jsonify({"status": "error", "message": "No token returned"}), 400
-        return jsonify(make_success_response(oauth_data["access_token"], oauth_data["open_id"], token_value)), 200
-    except Exception as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
+    result = generate_guest_account(uid, password)
+    return jsonify(result), 200 if result.get("status") == "success" else 400
 
 
 @app.route("/eat", methods=["GET", "POST"])
