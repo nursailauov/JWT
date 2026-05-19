@@ -23,15 +23,22 @@ MAJOR_LOGIN_URL = "https://loginbp.ggpolarbear.com/MajorLogin"
 PLATFORM_MAP = {3: "Facebook", 4: "Guest", 5: "VK", 6: "Huawei", 8: "Google", 11: "X (Twitter)", 13: "AppleId"}
 DEFAULT_PLATFORMS = [8, 3, 4, 6, 5, 11, 13]
 
-WEB_HTML = """
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JWT API</title>
-<style>body{margin:0;background:#0b0f17;color:#e8eef8;font-family:Arial,sans-serif}.wrap{max-width:860px;margin:0 auto;padding:28px 16px}code,pre{background:#111827;border:1px solid #253247;border-radius:8px;padding:10px;display:block;overflow:auto}a{color:#4ea1ff}</style></head>
-<body><main class="wrap"><h1>JWT API</h1><pre>/token?access_token=ACCESS_TOKEN
-/token?access_token=ACCESS_TOKEN&open_id=OPEN_ID
-/eat?eat_token=EAT_TOKEN_OR_URL
-/guest?uid=UID&password=PASSWORD
-/bulk_guest POST {"accounts":"uid:password\nuid:password"}</pre></main></body></html>
-"""
+WEB_HTML = r'''
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JWT Account Checker</title>
+<style>:root{color-scheme:dark;--bg:#0b0f17;--panel:#121925;--line:#253247;--text:#e8eef8;--muted:#8fa0b8;--ok:#43d17a;--bad:#ff6473;--warn:#f5c15b;--accent:#4ea1ff}*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}.wrap{max-width:1180px;margin:0 auto;padding:28px 16px 40px}h1{margin:0 0 6px;font-size:34px}.sub{color:var(--muted);margin-bottom:18px}.grid{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.head{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border-bottom:1px solid var(--line)}textarea{width:100%;min-height:430px;resize:vertical;border:0;outline:0;padding:14px;background:#0a0f18;color:var(--text);font:13px/1.45 Consolas,monospace}.actions{display:flex;gap:10px;padding:12px;border-top:1px solid var(--line)}button{border:1px solid var(--line);background:#172235;color:var(--text);border-radius:7px;padding:10px 13px;cursor:pointer;font-weight:700}.primary{background:var(--accent);border-color:var(--accent);color:#06111f}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px}.stat b{display:block;font-size:22px}.stat span,.small,.status{color:var(--muted);font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 11px;border-bottom:1px solid var(--line)}th{color:var(--muted);position:sticky;top:0;background:#0f1520}.table-wrap{max-height:560px;overflow:auto}.badge{display:inline-flex;min-width:58px;justify-content:center;padding:4px 7px;border-radius:999px;background:#1b2840;color:var(--muted);font-weight:700}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.status{padding:10px 12px;border-top:1px solid var(--line);min-height:39px}@media(max-width:860px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}</style></head>
+<body><div class="wrap"><h1>JWT Account Checker</h1><div class="sub">Bulk guest check. Paste uid:password lines.</div><div class="grid"><section class="panel"><div class="head"><b>Accounts</b><span class="small" id="lineCount">0 lines</span></div><textarea id="accounts" spellcheck="false" placeholder="4305390755:password&#10;4442030961:password"></textarea><div class="actions"><button class="primary" id="checkBtn">Check</button><button id="clearBtn">Clear</button></div><div class="status" id="status">Waiting.</div></section><main><div class="stats"><div class="stat"><b id="total">0</b><span>Total</span></div><div class="stat"><b id="ok">0</b><span>Working</span></div><div class="stat"><b id="lvl22">0</b><span>Level 22+</span></div><div class="stat"><b id="bad">0</b><span>Errors</span></div></div><section class="panel"><div class="head"><b>Results</b><button id="copyBtn">Copy JSON</button></div><div class="table-wrap"><table><thead><tr><th>#</th><th>UID</th><th>Level</th><th>Likes</th><th>Region</th><th>Name</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="small">No results.</td></tr></tbody></table></div></section></main></div></div>
+<script>
+const $=id=>document.getElementById(id);let results=[];let running=false;
+function parseLines(){return $('accounts').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).map(line=>{const p=line.indexOf(':');return p<0?{raw:line,status:'error',message:'invalid_format'}:{uid:line.slice(0,p).trim(),password:line.slice(p+1).trim(),status:'pending'}})}
+function updateCount(){$('lineCount').textContent=`${parseLines().length} lines`}
+function setStatus(t){$('status').textContent=t}
+function esc(v){return String(v??'-').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function draw(){const ok=results.filter(r=>r.status==='success');$('total').textContent=results.length;$('ok').textContent=ok.length;$('lvl22').textContent=ok.filter(r=>Number(r.level||0)>=22).length;$('bad').textContent=results.filter(r=>r.status==='error').length;if(!results.length){$('rows').innerHTML='<tr><td colspan="7" class="small">No results.</td></tr>';return}$('rows').innerHTML=results.map((r,i)=>{const level=r.level==null?'-':r.level;const cls=Number(level)>=22?'ok':(level==='-'?'':'warn');const st=r.status==='success'?'<span class="ok">success</span>':(r.status==='pending'?'<span class="warn">pending</span>':`<span class="bad">${esc(r.message||'error')}</span>`);return `<tr><td>${i+1}</td><td>${esc(r.uid||r.raw)}</td><td><span class="badge ${cls}">${esc(level)}</span></td><td>${esc(r.likes)}</td><td>${esc(r.region)}</td><td>${esc(r.account_name)}</td><td>${st}</td></tr>`}).join('')}
+async function checkOne(item,index){if(!item.uid||!item.password){results[index]={...item,status:'error',message:'invalid_format'};draw();return}try{const res=await fetch('/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:item.uid,password:item.password})});const data=await res.json();results[index]={...data,uid:item.uid,status:data.status||'error'};}catch(e){results[index]={uid:item.uid,status:'error',message:e.message}}draw();}
+async function check(){if(running)return;const items=parseLines();if(!items.length){setStatus('Paste uid:password lines.');return}running=true;$('checkBtn').disabled=true;results=items.map(x=>({...x,status:x.status==='error'?'error':'pending'}));draw();let done=0;setStatus(`Checking: 0/${items.length}`);let next=0;async function worker(){while(next<items.length){const i=next++;await checkOne(items[i],i);done++;setStatus(`Checking: ${done}/${items.length}`)}}await Promise.all(Array.from({length:Math.min(4,items.length)},worker));setStatus(`Done: ${results.filter(r=>r.status==='success').length}/${items.length} working.`);running=false;$('checkBtn').disabled=false;}
+$('accounts').addEventListener('input',updateCount);$('checkBtn').addEventListener('click',check);$('clearBtn').addEventListener('click',()=>{if(running)return;$('accounts').value='';results=[];updateCount();draw();setStatus('Waiting.')});$('copyBtn').addEventListener('click',async()=>{await navigator.clipboard.writeText(JSON.stringify(results,null,2));setStatus('JSON copied.')});updateCount();
+</script></body></html>
+'''
 
 
 def encrypt_message(plaintext):
@@ -128,8 +135,9 @@ def extract_eat_token(user_input):
         return None
     user_input = str(user_input).strip()
     if "http" in user_input or "?" in user_input:
-        query_params = parse_qs(urlparse(user_input).query)
-        return query_params.get("eat", [None])[0] or query_params.get("eat_token", [None])[0]
+        parsed_url = urlparse(user_input)
+        query_params = parse_qs(parsed_url.query)
+        return query_params.get("eat", [None])[0]
     return user_input
 
 
@@ -168,8 +176,7 @@ def fetch_open_id(access_token):
             return None, f"Failed to extract UID: inspect_http_{uid_res.status_code}"
         uid = uid_data.get("uid")
         if not uid:
-            detail = uid_data.get("message") or uid_data.get("error") or "empty_uid"
-            return None, f"Failed to extract UID: inspect_http_{uid_res.status_code}:{detail}"
+            return None, f"Failed to extract UID: inspect_http_{uid_res.status_code}"
 
         payload = {"app_id": 100067, "login_id": str(uid)}
         shop_headers = {
@@ -274,49 +281,46 @@ def make_success_response(access_token, open_id, token_value):
 
 
 def major_login(access_token, open_id, platform_type):
-    try:
-        headers = {
-            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/octet-stream",
-            "Expect": "100-continue",
-            "X-Unity-Version": "2018.4.11f1",
-            "X-GA": "v1 1",
-            "ReleaseVersion": "OB53",
-        }
-        game_data = my_pb2.GameData()
-        game_data.timestamp = "2024-12-05 18:15:32"
-        game_data.game_name = "free fire"
-        game_data.game_version = 1
-        game_data.version_code = "1.108.3"
-        game_data.os_info = "Android OS 9 / API-28 (PI/rel.cjw.20220518.114133)"
-        game_data.device_type = "Handheld"
-        game_data.network_provider = "Verizon Wireless"
-        game_data.connection_type = "WIFI"
-        game_data.screen_width = 1280
-        game_data.screen_height = 960
-        game_data.dpi = "240"
-        game_data.cpu_info = "ARMv7 VFPv3 NEON VMH | 2400 | 4"
-        game_data.total_ram = 5951
-        game_data.gpu_name = "Adreno (TM) 640"
-        game_data.gpu_version = "OpenGL ES 3.0"
-        game_data.user_id = "Google|74b585a9-0268-4ad3-8f36-ef41d2e53610"
-        game_data.ip_address = "172.190.111.97"
-        game_data.language = "en"
-        game_data.open_id = open_id
-        game_data.access_token = access_token
-        game_data.platform_type = int(platform_type)
-        game_data.field_99 = str(platform_type)
-        game_data.field_100 = str(platform_type)
-        response = requests.post(MAJOR_LOGIN_URL, data=encrypt_message(game_data.SerializeToString()), headers=headers, verify=False, timeout=8)
-        if response.status_code != 200:
-            return None
-        msg = output_pb2.Garena_420()
-        msg.ParseFromString(response.content)
-        return getattr(msg, "token", None)
-    except Exception:
+    headers = {
+        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+        "Connection": "Keep-Alive",
+        "Accept-Encoding": "gzip",
+        "Content-Type": "application/octet-stream",
+        "Expect": "100-continue",
+        "X-Unity-Version": "2018.4.11f1",
+        "X-GA": "v1 1",
+        "ReleaseVersion": "OB53",
+    }
+    game_data = my_pb2.GameData()
+    game_data.timestamp = "2024-12-05 18:15:32"
+    game_data.game_name = "free fire"
+    game_data.game_version = 1
+    game_data.version_code = "1.108.3"
+    game_data.os_info = "Android OS 9 / API-28 (PI/rel.cjw.20220518.114133)"
+    game_data.device_type = "Handheld"
+    game_data.network_provider = "Verizon Wireless"
+    game_data.connection_type = "WIFI"
+    game_data.screen_width = 1280
+    game_data.screen_height = 960
+    game_data.dpi = "240"
+    game_data.cpu_info = "ARMv7 VFPv3 NEON VMH | 2400 | 4"
+    game_data.total_ram = 5951
+    game_data.gpu_name = "Adreno (TM) 640"
+    game_data.gpu_version = "OpenGL ES 3.0"
+    game_data.user_id = "Google|74b585a9-0268-4ad3-8f36-ef41d2e53610"
+    game_data.ip_address = "172.190.111.97"
+    game_data.language = "en"
+    game_data.open_id = open_id
+    game_data.access_token = access_token
+    game_data.platform_type = int(platform_type)
+    game_data.field_99 = str(platform_type)
+    game_data.field_100 = str(platform_type)
+    response = requests.post(MAJOR_LOGIN_URL, data=encrypt_message(game_data.SerializeToString()), headers=headers, verify=False, timeout=8)
+    if response.status_code != 200:
         return None
+    msg = output_pb2.Garena_420()
+    msg.ParseFromString(response.content)
+    return getattr(msg, "token", None)
 
 
 def generate_jwt_from_access(access_token, open_id=None):
