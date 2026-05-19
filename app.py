@@ -61,6 +61,71 @@ def decode_jwt_payload(token_value):
         return json.loads(base64.urlsafe_b64decode(payload_b64.encode("utf-8")))
 
 
+def pb_varint(value):
+    output = bytearray()
+    value = int(value)
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            output.append(byte | 0x80)
+        else:
+            output.append(byte)
+            break
+    return bytes(output)
+
+
+def pb_key(field_number, wire_type):
+    return pb_varint((field_number << 3) | wire_type)
+
+
+def pb_int(field_number, value):
+    return pb_key(field_number, 0) + pb_varint(value)
+
+
+def read_varint(data, index):
+    shift = 0
+    value = 0
+    while index < len(data):
+        byte = data[index]
+        index += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, index
+        shift += 7
+    return None, index
+
+
+def parse_pb_fields(data):
+    fields = {}
+    index = 0
+    while index < len(data):
+        key, index = read_varint(data, index)
+        if key is None:
+            break
+        field_number = key >> 3
+        wire_type = key & 7
+        value = None
+        if wire_type == 0:
+            value, index = read_varint(data, index)
+        elif wire_type == 1:
+            value = data[index:index + 8]
+            index += 8
+        elif wire_type == 2:
+            length, index = read_varint(data, index)
+            if length is None:
+                break
+            value = data[index:index + length]
+            index += length
+        elif wire_type == 5:
+            value = data[index:index + 4]
+            index += 4
+        else:
+            break
+        fields.setdefault(field_number, []).append(value)
+    return fields
+
+
 def extract_eat_token(user_input):
     if "http" in user_input or "?" in user_input:
         return parse_qs(urlparse(user_input).query).get("eat", [None])[0]
@@ -119,8 +184,7 @@ def fetch_open_id(access_token):
             "Cookie": "source=mb; region=PK; mspid2=13c49fb51ece78886ebf7108a4907756; _fbp=fb.1.1753985808817.794945392376454660; language=en; datadome=WQaG3HalUB3PsGoSXY3TdcrSQextsSFwkOp1cqZtJ7Ax4YkiERHUgkgHlEAIccQO~w8dzTGM70D9SzaH7vymmEqOrVeX5pIsPVE22Uf3TDu6W3WG7j36ulnTg2DltRO7; session_key=hq02g63z3zjcumm76mafcooitj7nc79y",
         }
         openid_res = requests.post(openid_url, headers=openid_headers, json={"app_id": 100067, "login_id": str(uid)}, verify=False, timeout=10)
-        openid_data = openid_res.json()
-        open_id = openid_data.get("open_id")
+        open_id = openid_res.json().get("open_id")
         if not open_id:
             return None, "Failed to extract open_id"
         return open_id, None
@@ -156,6 +220,66 @@ def build_game_data(access_token, open_id, platform_type):
     return game_data.SerializeToString()
 
 
+def get_profile_url(region):
+    if str(region).upper() in {"BR", "US", "SAC", "NA"}:
+        return "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
+    return "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
+
+
+def fetch_profile_stats(account_id, region, token_value):
+    try:
+        payload = encrypt_message(pb_int(1, int(account_id)) + pb_int(2, 1))
+        headers = {
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+            "Authorization": f"Bearer {token_value}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-GA": "v1 1",
+            "ReleaseVersion": "OB53",
+        }
+        response = requests.post(get_profile_url(region), data=payload, headers=headers, verify=False, timeout=10)
+        if response.status_code != 200:
+            return {}
+        root = parse_pb_fields(response.content)
+        account_info = root.get(1, [None])[0]
+        if not isinstance(account_info, (bytes, bytearray)):
+            return {}
+        info = parse_pb_fields(account_info)
+        return {
+            "level": info.get(6, [None])[0],
+            "likes": info.get(21, [None])[0],
+        }
+    except Exception:
+        return {}
+
+
+def make_success_response(access_token, open_id, token_value):
+    decoded_token = decode_jwt_payload(token_value)
+    external_type = decoded_token.get("external_type")
+    raw_nickname = decoded_token.get("nickname", "")
+    account_name = decode_ff_name(raw_nickname)
+    if not account_name:
+        import urllib.parse
+        account_name = urllib.parse.unquote(raw_nickname)
+
+    account_id = decoded_token.get("account_id")
+    region = decoded_token.get("lock_region")
+    profile_stats = fetch_profile_stats(account_id, region, token_value) if account_id else {}
+
+    result = {
+        "access_token": access_token,
+        "account_id": account_id,
+        "account_name": account_name,
+        "open_id": open_id,
+        "platform": PLATFORM_MAP.get(external_type, f"Unknown ({external_type})"),
+        "platform_type": external_type,
+        "region": region,
+        "status": "success",
+        "token": token_value,
+    }
+    result.update(profile_stats)
+    return result
+
+
 def internal_generate_jwt(access_token):
     open_id, error = fetch_open_id(access_token)
     if error:
@@ -181,26 +305,8 @@ def internal_generate_jwt(access_token):
             example_msg = output_pb2.Garena_420()
             example_msg.ParseFromString(response.content)
             token_value = getattr(example_msg, "token", None)
-            if not token_value:
-                continue
-            decoded_token = decode_jwt_payload(token_value)
-            external_type = decoded_token.get("external_type")
-            raw_nickname = decoded_token.get("nickname", "")
-            account_name = decode_ff_name(raw_nickname)
-            if not account_name:
-                import urllib.parse
-                account_name = urllib.parse.unquote(raw_nickname)
-            return {
-                "access_token": access_token,
-                "account_id": decoded_token.get("account_id"),
-                "account_name": account_name,
-                "open_id": open_id,
-                "platform": PLATFORM_MAP.get(external_type, f"Unknown ({external_type})"),
-                "platform_type": external_type,
-                "region": decoded_token.get("lock_region"),
-                "status": "success",
-                "token": token_value,
-            }, 200
+            if token_value:
+                return make_success_response(access_token, open_id, token_value), 200
         except Exception:
             continue
 
@@ -294,17 +400,7 @@ def guest_endpoint():
         token_value = getattr(example_msg, "token", None)
         if not token_value:
             return jsonify({"status": "error", "message": "No token returned"}), 400
-        decoded_token = decode_jwt_payload(token_value)
-        return jsonify({
-            "access_token": oauth_data["access_token"],
-            "account_id": decoded_token.get("account_id"),
-            "open_id": oauth_data["open_id"],
-            "platform": PLATFORM_MAP.get(decoded_token.get("external_type")),
-            "platform_type": decoded_token.get("external_type"),
-            "region": decoded_token.get("lock_region"),
-            "status": "success",
-            "token": token_value,
-        }), 200
+        return jsonify(make_success_response(oauth_data["access_token"], oauth_data["open_id"], token_value)), 200
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
 
